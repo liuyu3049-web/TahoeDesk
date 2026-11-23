@@ -17,6 +17,22 @@ namespace GlassShell.UI.Glass;
 
 public sealed class LiquidGlassRenderer : IDisposable
 {
+    private sealed class SharedOutputSlot : IDisposable
+    {
+        public required ID3D11Texture2D RenderTarget { get; init; }
+        public required ID3D11RenderTargetView Rtv { get; init; }
+        public required IDirect3DTexture9 SharedD3d9Tex { get; init; }
+        public required IDirect3DSurface9 SharedD3d9Surface { get; init; }
+
+        public void Dispose()
+        {
+            SharedD3d9Surface.Dispose();
+            SharedD3d9Tex.Dispose();
+            Rtv.Dispose();
+            RenderTarget.Dispose();
+        }
+    }
+
     private readonly DxgiBackdropSampler _sampler;
     private ID3D11VertexShader? _vs;
     private ID3D11PixelShader? _psBlurH;
@@ -25,14 +41,16 @@ public sealed class LiquidGlassRenderer : IDisposable
     private ID3D11Buffer? _constantBuffer;
     private ID3D11Query? _gpuSyncQuery;
 
+    // Half-resolution Pass 1 intermediate blur texture (4x faster GPU fill rate)
     private ID3D11Texture2D? _tempBlurTex;
     private ID3D11RenderTargetView? _tempBlurRtv;
     private ID3D11ShaderResourceView? _tempBlurSrv;
+    private int _tempW;
+    private int _tempH;
 
-    private ID3D11Texture2D? _renderTarget;
-    private ID3D11RenderTargetView? _rtv;
-    private IDirect3DTexture9? _sharedD3d9Tex;
-    private IDirect3DSurface9? _sharedD3d9Surface;
+    // Double-buffered ping-pong D3D11/D3D9Ex shared outputs so WPF milcore never races with active GPU writes
+    private readonly SharedOutputSlot?[] _swapSlots = new SharedOutputSlot?[2];
+    private int _activeSlotIndex;
 
     private int _rtWidth;
     private int _rtHeight;
@@ -40,6 +58,7 @@ public sealed class LiquidGlassRenderer : IDisposable
     private ScreenRect _lastRenderedRect;
     private GlassRenderParams _lastRenderedParams;
     private float _lastShadowPad;
+    private float _lastActiveBoxWidthPx;
     private bool _initialized;
     private bool _disposed;
 
@@ -48,12 +67,13 @@ public sealed class LiquidGlassRenderer : IDisposable
         _sampler = sampler ?? throw new ArgumentNullException(nameof(sampler));
     }
 
-    public nint SharedD3D9SurfacePtr => _sharedD3d9Surface?.NativePointer ?? 0;
+    public nint SharedD3D9SurfacePtr => _swapSlots[_activeSlotIndex]?.SharedD3d9Surface.NativePointer ?? 0;
 
     public bool RenderSurface(
         ScreenRect surfaceRectPx,
         GlassRenderParams glassParams,
         float shadowPaddingPx,
+        float activeBoxWidthPx,
         Action beforeRecreateTargets,
         out bool frameUpdated)
     {
@@ -66,12 +86,13 @@ public sealed class LiquidGlassRenderer : IDisposable
             return false;
         }
 
-        // Skip redundant GPU re-draw when desktop frame + surface rect + glass params are unchanged!
-        if (_sharedD3d9Surface is not null
+        // Skip redundant GPU re-draw when desktop frame + geometry + params are unchanged
+        if (_swapSlots[_activeSlotIndex] is not null
             && frameVersion == _lastRenderedFrameVersion
             && surfaceRectPx == _lastRenderedRect
             && glassParams == _lastRenderedParams
-            && Math.Abs(shadowPaddingPx - _lastShadowPad) < 0.1f)
+            && Math.Abs(shadowPaddingPx - _lastShadowPad) < 0.1f
+            && Math.Abs(activeBoxWidthPx - _lastActiveBoxWidthPx) < 0.35f)
         {
             return true;
         }
@@ -94,6 +115,11 @@ public sealed class LiquidGlassRenderer : IDisposable
             return false;
         }
 
+        // Ping-pong to the back slot not currently being read by WPF milcore
+        int writeIdx = 1 - _activeSlotIndex;
+        var targetSlot = _swapSlots[writeIdx];
+        if (targetSlot is null) return false;
+
         try
         {
             float dw = outputBounds.Width;
@@ -114,35 +140,34 @@ public sealed class LiquidGlassRenderer : IDisposable
                 BlurRadius = glassParams.BlurRadius,
                 TintAlpha = glassParams.TintAlpha,
                 SpecularStrength = glassParams.SpecularStrength,
-                IsDarkMode = glassParams.IsDarkMode ? 1.0f : 0.0f
+                IsDarkMode = glassParams.IsDarkMode ? 1.0f : 0.0f,
+                ActiveBoxWidthPx = activeBoxWidthPx
             };
 
-            var vp = new Vortice.Mathematics.Viewport(0, 0, surfaceRectPx.Width, surfaceRectPx.Height);
             ctx.UpdateSubresource(in cb, _constantBuffer!);
             ctx.IASetPrimitiveTopology(PrimitiveTopology.TriangleList);
             ctx.IASetInputLayout(null);
             ctx.VSSetShader(_vs);
             ctx.PSSetConstantBuffer(0, _constantBuffer);
             ctx.PSSetSampler(0, _linearSampler);
-            ctx.RSSetViewport(vp);
 
-            // Pass 1: Horizontal 15-tap Gaussian blur from output texture -> _tempBlurTex
+            // Pass 1 (Half-Res): Horizontal bilinear-Gaussian blur -> _tempBlurTex
+            ctx.RSSetViewport(new Vortice.Mathematics.Viewport(0, 0, _tempW, _tempH));
             ctx.OMSetRenderTargets(_tempBlurRtv!);
             ctx.PSSetShader(_psBlurH);
             ctx.PSSetShaderResource(0, srv);
             ctx.Draw(3, 0);
             ctx.PSSetShaderResource(0, null!);
 
-            // Pass 2: Vertical 15-tap Gaussian blur + Squircle SDF + clean Liquid Glass -> _renderTarget
-            ctx.OMSetRenderTargets(_rtv!);
-            ctx.ClearRenderTargetView(_rtv!, new Color4(0, 0, 0, 0));
+            // Pass 2 (Full-Res): Vertical bilinear-Gaussian blur + Squircle SDF + Liquid Glass -> back swap slot
+            ctx.RSSetViewport(new Vortice.Mathematics.Viewport(0, 0, surfaceRectPx.Width, surfaceRectPx.Height));
+            ctx.OMSetRenderTargets(targetSlot.Rtv);
+            ctx.ClearRenderTargetView(targetSlot.Rtv, new Color4(0, 0, 0, 0));
             ctx.PSSetShader(_psComposite);
             ctx.PSSetShaderResource(0, _tempBlurSrv!);
             ctx.Draw(3, 0);
             ctx.PSSetShaderResource(0, null!);
 
-            // CRITICAL: Wait for GPU completion via D3D11 Event Query before WPF D3D9Ex reads the shared texture!
-            // Eliminates shimmering tiled checkerboard corruption ("格子花屏") when multiple glass windows render concurrently.
             if (_gpuSyncQuery is not null)
             {
                 ctx.End(_gpuSyncQuery);
@@ -154,10 +179,12 @@ public sealed class LiquidGlassRenderer : IDisposable
                 ctx.Flush();
             }
 
+            _activeSlotIndex = writeIdx;
             _lastRenderedFrameVersion = frameVersion;
             _lastRenderedRect = surfaceRectPx;
             _lastRenderedParams = glassParams;
             _lastShadowPad = shadowPaddingPx;
+            _lastActiveBoxWidthPx = activeBoxWidthPx;
             frameUpdated = true;
             return SharedD3D9SurfacePtr != 0;
         }
@@ -226,8 +253,8 @@ public sealed class LiquidGlassRenderer : IDisposable
         int height,
         Action beforeRecreateTargets)
     {
-        if (_renderTarget is not null && _tempBlurTex is not null
-            && _rtWidth == width && _rtHeight == height && _sharedD3d9Surface is not null)
+        if (_swapSlots[0] is not null && _swapSlots[1] is not null && _tempBlurTex is not null
+            && _rtWidth == width && _rtHeight == height)
         {
             return true;
         }
@@ -237,10 +264,13 @@ public sealed class LiquidGlassRenderer : IDisposable
 
         try
         {
+            _tempW = Math.Max(2, width / 2);
+            _tempH = Math.Max(2, height / 2);
+
             var tempDesc = new Texture2DDescription
             {
-                Width = (uint)width,
-                Height = (uint)height,
+                Width = (uint)_tempW,
+                Height = (uint)_tempH,
                 MipLevels = 1,
                 ArraySize = 1,
                 Format = Vortice.DXGI.Format.B8G8R8A8_UNorm,
@@ -253,26 +283,55 @@ public sealed class LiquidGlassRenderer : IDisposable
             _tempBlurRtv = device.CreateRenderTargetView(_tempBlurTex);
             _tempBlurSrv = device.CreateShaderResourceView(_tempBlurTex);
 
-            var outDesc = tempDesc with { MiscFlags = ResourceOptionFlags.Shared };
-            _renderTarget = device.CreateTexture2D(outDesc);
-            _rtv = device.CreateRenderTargetView(_renderTarget);
+            var outDesc = new Texture2DDescription
+            {
+                Width = (uint)width,
+                Height = (uint)height,
+                MipLevels = 1,
+                ArraySize = 1,
+                Format = Vortice.DXGI.Format.B8G8R8A8_UNorm,
+                SampleDescription = new SampleDescription(1, 0),
+                Usage = ResourceUsage.Default,
+                BindFlags = BindFlags.RenderTarget | BindFlags.ShaderResource,
+                MiscFlags = ResourceOptionFlags.Shared
+            };
 
-            using var dxgiRes = _renderTarget.QueryInterface<IDXGIResource>();
-            nint sharedHandle = dxgiRes.SharedHandle;
-            if (sharedHandle == 0) return false;
+            for (int i = 0; i < 2; i++)
+            {
+                var rt = device.CreateTexture2D(outDesc);
+                var rtv = device.CreateRenderTargetView(rt);
+                using var dxgiRes = rt.QueryInterface<IDXGIResource>();
+                nint sharedHandle = dxgiRes.SharedHandle;
+                if (sharedHandle == 0)
+                {
+                    rtv.Dispose();
+                    rt.Dispose();
+                    DisposeTargets();
+                    return false;
+                }
 
-            _sharedD3d9Tex = d3d9Device.CreateTexture(
-                (uint)width,
-                (uint)height,
-                1,
-                Vortice.Direct3D9.Usage.RenderTarget,
-                Vortice.Direct3D9.Format.A8R8G8B8,
-                Pool.Default,
-                ref sharedHandle);
+                var d3d9Tex = d3d9Device.CreateTexture(
+                    (uint)width,
+                    (uint)height,
+                    1,
+                    Vortice.Direct3D9.Usage.RenderTarget,
+                    Vortice.Direct3D9.Format.A8R8G8B8,
+                    Pool.Default,
+                    ref sharedHandle);
 
-            _sharedD3d9Surface = _sharedD3d9Tex.GetSurfaceLevel(0);
+                var d3d9Surf = d3d9Tex.GetSurfaceLevel(0);
+                _swapSlots[i] = new SharedOutputSlot
+                {
+                    RenderTarget = rt,
+                    Rtv = rtv,
+                    SharedD3d9Tex = d3d9Tex,
+                    SharedD3d9Surface = d3d9Surf
+                };
+            }
+
             _rtWidth = width;
             _rtHeight = height;
+            _activeSlotIndex = 0;
             _lastRenderedFrameVersion = -1;
             return true;
         }
@@ -285,18 +344,16 @@ public sealed class LiquidGlassRenderer : IDisposable
 
     private void DisposeTargets()
     {
-        _sharedD3d9Surface?.Dispose();
-        _sharedD3d9Tex?.Dispose();
-        _rtv?.Dispose();
-        _renderTarget?.Dispose();
+        for (int i = 0; i < _swapSlots.Length; i++)
+        {
+            _swapSlots[i]?.Dispose();
+            _swapSlots[i] = null;
+        }
+
         _tempBlurSrv?.Dispose();
         _tempBlurRtv?.Dispose();
         _tempBlurTex?.Dispose();
 
-        _sharedD3d9Surface = null;
-        _sharedD3d9Tex = null;
-        _rtv = null;
-        _renderTarget = null;
         _tempBlurSrv = null;
         _tempBlurRtv = null;
         _tempBlurTex = null;
@@ -332,5 +389,7 @@ public sealed class LiquidGlassRenderer : IDisposable
         public float TintAlpha;
         public float SpecularStrength;
         public float IsDarkMode;
+        public float ActiveBoxWidthPx;
+        public Vector3 _Pad;
     }
 }

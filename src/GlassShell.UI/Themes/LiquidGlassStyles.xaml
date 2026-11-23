@@ -1,6 +1,6 @@
 <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
-    <FontFamily x:Key="MacUiFont">Segoe UI Variable Text, Microsoft YaHei UI, Segoe UI</FontFamily>
+    <FontFamily x:Key="MacUiFont">Microsoft YaHei UI, Segoe UI</FontFamily>
 
     <SolidColorBrush x:Key="MenuBarForegroundBrush" Color="#F8FFFFFF" />
     <SolidColorBrush x:Key="MenuBarHoverBrush" Color="#33FFFFFF" />
@@ -15,8 +15,8 @@
         <Setter Property="Height" Value="22" />
         <Setter Property="VerticalAlignment" Value="Center" />
         <Setter Property="FontFamily" Value="{StaticResource MacUiFont}" />
-        <Setter Property="FontSize" Value="13" />
-        <Setter Property="FontWeight" Value="Medium" />
+        <Setter Property="FontSize" Value="12.5" />
+        <Setter Property="FontWeight" Value="Normal" />
         <Setter Property="TextOptions.TextFormattingMode" Value="Ideal" />
         <Setter Property="TextOptions.TextRenderingMode" Value="Grayscale" />
         <Setter Property="SnapsToDevicePixels" Value="False" />

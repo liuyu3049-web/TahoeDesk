@@ -14,7 +14,8 @@ public static class DockModelCoordinator
         GlassSettings settings,
         IReadOnlyList<WindowInfo> runningWindows,
         IReadOnlyList<string> recentAppPaths,
-        RecycleBinStatus recycleBin)
+        RecycleBinStatus recycleBin,
+        IReadOnlyList<string>? stableRunningOrder = null)
     {
         var items = new List<DockItemModel>();
 
@@ -76,17 +77,22 @@ public static class DockModelCoordinator
                 IsFlashing: openList?.Any(w => w.IsFlashing) ?? false));
         }
 
-        // Section 2: Unpinned running apps + optional recent apps (max 3)
+        // Section 2: Unpinned running apps in STABLE first-seen order (never jumps to slot #1 on click!) + optional recent apps (max 3)
         var shownMiddle = new HashSet<string>(pinnedSet, StringComparer.OrdinalIgnoreCase);
-        foreach (var kvp in runningByExe)
-        {
-            // Exclude explorer.exe (already represented by 此电脑)
-            if (kvp.Key.EndsWith(@"\explorer.exe", StringComparison.OrdinalIgnoreCase)) continue;
-            if (!shownMiddle.Add(kvp.Key)) continue;
 
-            var list = kvp.Value;
+        IEnumerable<string> orderedRunningKeys = stableRunningOrder is { Count: > 0 }
+            ? stableRunningOrder.Select(NormalizePath).Concat(runningByExe.Keys)
+            : runningByExe.Keys;
+
+        foreach (var exeKey in orderedRunningKeys)
+        {
+            if (!runningByExe.TryGetValue(exeKey, out var list)) continue;
+            // Exclude explorer.exe (already represented by 此电脑)
+            if (exeKey.EndsWith(@"\explorer.exe", StringComparison.OrdinalIgnoreCase)) continue;
+            if (!shownMiddle.Add(exeKey)) continue;
+
             items.Add(new DockItemModel(
-                Id: $"app:{kvp.Key}",
+                Id: $"app:{exeKey}",
                 Title: list[0].AppDisplayName,
                 TargetPath: list[0].ExecutablePath,
                 Kind: DockItemKind.Application,

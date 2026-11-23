@@ -134,7 +134,13 @@ public partial class MenuBarWindow : Window
         Left = monitor.Bounds.Left / monitor.DpiScale;
         Top = monitor.Bounds.Top / monitor.DpiScale;
         Width = monitor.WidthDip;
-        Height = 28;
+
+        // If the display already has a top reserved work-area strip (e.g. 32 DIP), match its exact height
+        // so the Liquid Glass top menu bar sits 0px flush against maximized windows with zero gap.
+        double workTopDip = monitor.WorkArea.Width > 0
+            ? (monitor.WorkArea.Top - monitor.Bounds.Top) / monitor.DpiScale
+            : 0;
+        Height = workTopDip >= 28.0 && workTopDip <= 40.0 ? Math.Round(workTopDip) : 28.0;
     }
 
     private void OnSourceInitialized(object? sender, EventArgs e)

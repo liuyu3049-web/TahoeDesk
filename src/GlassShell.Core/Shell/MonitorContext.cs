@@ -9,7 +9,12 @@ public readonly record struct ScreenRect(int Left, int Top, int Right, int Botto
     public int Height => Bottom - Top;
 }
 
-public sealed record MonitorContext(nint MonitorHandle, ScreenRect Bounds, double DpiScale, bool IsPrimary)
+public sealed record MonitorContext(
+    nint MonitorHandle,
+    ScreenRect Bounds,
+    double DpiScale,
+    bool IsPrimary,
+    ScreenRect WorkArea = default)
 {
     public double WidthDip => Bounds.Width / DpiScale;
     public double HeightDip => Bounds.Height / DpiScale;
@@ -19,9 +24,13 @@ public sealed record MonitorContext(nint MonitorHandle, ScreenRect Bounds, doubl
         var pt = new POINT { X = 0, Y = 0 };
         var hMonitor = MonitorFromPoint(pt, MONITOR_DEFAULTTOPRIMARY);
         var info = new MONITORINFO { cbSize = (uint)Marshal.SizeOf<MONITORINFO>() };
-        var bounds = GetMonitorInfoW(hMonitor, ref info)
+        bool ok = GetMonitorInfoW(hMonitor, ref info);
+        var bounds = ok
             ? new ScreenRect(info.rcMonitor.Left, info.rcMonitor.Top, info.rcMonitor.Right, info.rcMonitor.Bottom)
             : new ScreenRect(0, 0, 1920, 1080);
+        var work = ok
+            ? new ScreenRect(info.rcWork.Left, info.rcWork.Top, info.rcWork.Right, info.rcWork.Bottom)
+            : bounds;
 
         double dpiScale = 1.0;
         if (GetDpiForMonitor(hMonitor, MDT_EFFECTIVE_DPI, out uint dpiX, out _) == 0 && dpiX >= 96)
@@ -29,7 +38,7 @@ public sealed record MonitorContext(nint MonitorHandle, ScreenRect Bounds, doubl
             dpiScale = dpiX / 96.0;
         }
 
-        return new MonitorContext(hMonitor, bounds, dpiScale, IsPrimary: true);
+        return new MonitorContext(hMonitor, bounds, dpiScale, IsPrimary: true, WorkArea: work);
     }
 
     public static System.Collections.Generic.IReadOnlyList<MonitorContext> GetAllMonitors()
@@ -41,13 +50,14 @@ public sealed record MonitorContext(nint MonitorHandle, ScreenRect Bounds, doubl
             if (GetMonitorInfoW(hMonitor, ref info))
             {
                 var bounds = new ScreenRect(info.rcMonitor.Left, info.rcMonitor.Top, info.rcMonitor.Right, info.rcMonitor.Bottom);
+                var work = new ScreenRect(info.rcWork.Left, info.rcWork.Top, info.rcWork.Right, info.rcWork.Bottom);
                 double dpiScale = 1.0;
                 if (GetDpiForMonitor(hMonitor, MDT_EFFECTIVE_DPI, out uint dpiX, out _) == 0 && dpiX >= 96)
                 {
                     dpiScale = dpiX / 96.0;
                 }
                 bool isPrimary = (info.dwFlags & MONITORINFOF_PRIMARY) != 0;
-                list.Add(new MonitorContext(hMonitor, bounds, dpiScale, isPrimary));
+                list.Add(new MonitorContext(hMonitor, bounds, dpiScale, isPrimary, work));
             }
             return true;
         }, 0);

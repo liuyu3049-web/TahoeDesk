@@ -42,7 +42,7 @@
 
                 <Button x:Name="ActiveAppButton"
                         Style="{StaticResource MenuBarButtonStyle}"
-                        FontWeight="SemiBold"
+                        FontWeight="Bold"
                         Content="{Binding ActiveAppName}"
                         Click="OnActiveAppClick"
                         MouseEnter="OnActiveAppHover" />

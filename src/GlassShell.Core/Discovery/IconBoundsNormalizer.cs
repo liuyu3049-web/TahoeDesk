@@ -4,13 +4,11 @@ namespace GlassShell.Core.Discovery;
 
 public static class IconBoundsNormalizer
 {
-    private const byte AlphaThreshold = 16;
+    // Solid-core alpha threshold ignores faint outer drop-shadow halos (alpha ~20..80)
+    // that otherwise prevent Windows icons from trimming down to uniform visual diameter.
+    private const byte SolidAlphaThreshold = 110;
+    private const byte FallbackAlphaThreshold = 20;
 
-    /// <summary>
-    /// Crops excess transparent padding around a Windows icon bitmap and re-centers the visible
-    /// silhouette into a uniform square with a tiny 4% breathing margin so all Dock logos share
-    /// consistent visual diameter.
-    /// </summary>
     public static RawIconBitmap TrimTransparentPadding(RawIconBitmap source)
     {
         if (source.Width <= 4 || source.Height <= 4
@@ -19,38 +17,22 @@ public static class IconBoundsNormalizer
             return source;
         }
 
-        int w = source.Width;
-        int h = source.Height;
-        var src = source.BgraPixels;
-
-        int minX = w, minY = h, maxX = -1, maxY = -1;
-        for (int y = 0; y < h; y++)
+        if (!TryFindBounds(source, SolidAlphaThreshold, out int minX, out int minY, out int maxX, out int maxY))
         {
-            int rowOffset = y * w * 4;
-            for (int x = 0; x < w; x++)
+            if (!TryFindBounds(source, FallbackAlphaThreshold, out minX, out minY, out maxX, out maxY))
             {
-                if (src[rowOffset + x * 4 + 3] > AlphaThreshold)
-                {
-                    if (x < minX) minX = x;
-                    if (x > maxX) maxX = x;
-                    if (y < minY) minY = y;
-                    if (y > maxY) maxY = y;
-                }
+                return source;
             }
         }
 
-        if (maxX < minX || maxY < minY)
-        {
-            return source;
-        }
-
+        int w = source.Width;
+        int h = source.Height;
         int contentW = maxX - minX + 1;
         int contentH = maxY - minY + 1;
         int maxDim = Math.Max(contentW, contentH);
         int pad = Math.Max(1, (int)Math.Round(maxDim * 0.04));
         int outSize = maxDim + pad * 2;
 
-        // If already tight enough (>=90% filled), return as-is
         if (outSize >= Math.Min(w, h) && Math.Abs(w - h) <= 2)
         {
             return source;
@@ -60,13 +42,57 @@ public static class IconBoundsNormalizer
         int offsetX = (outSize - contentW) / 2;
         int offsetY = (outSize - contentH) / 2;
 
-        for (int y = 0; y < contentH; y++)
+        // Include up to 2px of anti-aliased edge pixels around the solid core so edges stay silky smooth
+        int copyMinX = Math.Max(0, minX - 1);
+        int copyMinY = Math.Max(0, minY - 1);
+        int copyMaxX = Math.Min(w - 1, maxX + 1);
+        int copyMaxY = Math.Min(h - 1, maxY + 1);
+        int copyW = copyMaxX - copyMinX + 1;
+        int copyH = copyMaxY - copyMinY + 1;
+
+        int dstStartX = Math.Max(0, offsetX - (minX - copyMinX));
+        int dstStartY = Math.Max(0, offsetY - (minY - copyMinY));
+        int clampedW = Math.Min(copyW, outSize - dstStartX);
+        int clampedH = Math.Min(copyH, outSize - dstStartY);
+
+        for (int y = 0; y < clampedH; y++)
         {
-            int srcRow = ((minY + y) * w + minX) * 4;
-            int dstRow = ((offsetY + y) * outSize + offsetX) * 4;
-            Buffer.BlockCopy(src, srcRow, dst, dstRow, contentW * 4);
+            int srcRow = ((copyMinY + y) * w + copyMinX) * 4;
+            int dstRow = ((dstStartY + y) * outSize + dstStartX) * 4;
+            Buffer.BlockCopy(source.BgraPixels, srcRow, dst, dstRow, clampedW * 4);
         }
 
         return new RawIconBitmap(outSize, outSize, dst);
+    }
+
+    private static bool TryFindBounds(
+        RawIconBitmap source,
+        byte alphaThreshold,
+        out int minX, out int minY, out int maxX, out int maxY)
+    {
+        int w = source.Width;
+        int h = source.Height;
+        var src = source.BgraPixels;
+        minX = w;
+        minY = h;
+        maxX = -1;
+        maxY = -1;
+
+        for (int y = 0; y < h; y++)
+        {
+            int rowOffset = y * w * 4;
+            for (int x = 0; x < w; x++)
+            {
+                if (src[rowOffset + x * 4 + 3] > alphaThreshold)
+                {
+                    if (x < minX) minX = x;
+                    if (x > maxX) maxX = x;
+                    if (y < minY) minY = y;
+                    if (y > maxY) maxY = y;
+                }
+            }
+        }
+
+        return maxX >= minX && maxY >= minY;
     }
 }

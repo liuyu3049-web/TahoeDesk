@@ -39,6 +39,7 @@ public partial class App : Application
     private nint _lastForegroundHwnd;
     private string _lastForegroundTitle = string.Empty;
     private readonly LinkedList<string> _recentApps = new();
+    private readonly List<string> _stableRunningOrder = [];
     private bool _cleanedUp;
 
     protected override void OnStartup(StartupEventArgs e)
@@ -143,14 +144,14 @@ public partial class App : Application
         _windowTracker.ForegroundChanged += OnForegroundChanged;
         _windowTracker.WindowsChanged += () => Dispatcher.InvokeAsync(RefreshDockItems);
 
-        // Acquire taskbar suppression + primary top AppBar; also register secondary monitor top AppBars cleanly
+        // Acquire taskbar suppression + primary top AppBar matching MenuBar height 1:1
         var primary = _shells.FirstOrDefault(s => s.Monitor.IsPrimary) ?? _shells[0];
-        _taskbarController.Acquire(primary.MenuBar.Hwnd, primary.Monitor, topBarDip: 28);
+        _taskbarController.Acquire(primary.MenuBar.Hwnd, primary.Monitor, topBarDip: (int)Math.Round(primary.MenuBar.Height));
         foreach (var s in _shells)
         {
             if (s != primary)
             {
-                int secHeightPx = (int)Math.Round(28 * s.Monitor.DpiScale);
+                int secHeightPx = (int)Math.Round(s.MenuBar.Height * s.Monitor.DpiScale);
                 _taskbarNative.RegisterTopAppBar(s.MenuBar.Hwnd, secHeightPx, s.Monitor.Bounds);
             }
         }
@@ -233,9 +234,17 @@ public partial class App : Application
         if (_windowTracker is null || _recycleBinService is null || _shells.Count == 0) return;
 
         var windows = _windowTracker.GetTopLevelWindows();
+        var activeExes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var w in windows)
         {
             if (string.IsNullOrWhiteSpace(w.ExecutablePath)) continue;
+            activeExes.Add(w.ExecutablePath);
+
+            if (!_stableRunningOrder.Any(p => string.Equals(p, w.ExecutablePath, StringComparison.OrdinalIgnoreCase)))
+            {
+                _stableRunningOrder.Add(w.ExecutablePath);
+            }
+
             if (!_recentApps.Any(p => string.Equals(p, w.ExecutablePath, StringComparison.OrdinalIgnoreCase)))
             {
                 _recentApps.AddFirst(w.ExecutablePath);
@@ -243,8 +252,11 @@ public partial class App : Application
             }
         }
 
+        // Remove apps from stable order only once all their windows have closed
+        _stableRunningOrder.RemoveAll(p => !activeExes.Contains(p));
+
         var rb = _recycleBinService.Query();
-        var items = DockModelCoordinator.BuildDockItems(_settings, windows, _recentApps.ToList(), rb);
+        var items = DockModelCoordinator.BuildDockItems(_settings, windows, _recentApps.ToList(), rb, _stableRunningOrder);
         foreach (var s in _shells)
         {
             s.Dock.UpdateItems(items);

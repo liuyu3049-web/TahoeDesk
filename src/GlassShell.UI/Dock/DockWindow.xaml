@@ -17,12 +17,11 @@
             <TranslateTransform x:Name="SlideTransform" Y="0" />
         </Grid.RenderTransform>
 
-        <!-- Liquid Glass Squircle capsule sits behind icons; icons can protrude freely above it -->
+        <!-- Fixed full-width GPU surface (IsHitTestVisible=False); capsule width animates purely in HLSL with ZERO GPU reallocations! -->
         <glass:LiquidGlassSurface x:Name="CapsuleGlass"
-                                  HorizontalAlignment="Center"
+                                  HorizontalAlignment="Stretch"
                                   VerticalAlignment="Bottom"
                                   Height="98"
-                                  Width="360"
                                   CornerRadius="22"
                                   ShadowPadding="16"
                                   IsDarkMode="True" />

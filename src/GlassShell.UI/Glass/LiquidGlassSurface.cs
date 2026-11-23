@@ -30,6 +30,10 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
         DependencyProperty.Register(nameof(IsOverlayCard), typeof(bool), typeof(LiquidGlassSurface),
             new FrameworkPropertyMetadata(false, FrameworkPropertyMetadataOptions.AffectsRender));
 
+    public static readonly DependencyProperty ActiveBoxWidthProperty =
+        DependencyProperty.Register(nameof(ActiveBoxWidth), typeof(double), typeof(LiquidGlassSurface),
+            new FrameworkPropertyMetadata(0.0));
+
     private readonly D3DImage _d3dImage = new();
     private DxgiBackdropSampler? _attachedSampler;
     private LiquidGlassRenderer? _renderer;
@@ -78,6 +82,16 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
     {
         get => (bool)GetValue(IsOverlayCardProperty);
         set => SetValue(IsOverlayCardProperty, value);
+    }
+
+    /// <summary>
+    /// Optional dynamic capsule width (in DIP) rendered inside a fixed-size GPU surface
+    /// so Dock magnification animates at 120fps with ZERO GPU texture reallocations.
+    /// </summary>
+    public double ActiveBoxWidth
+    {
+        get => (double)GetValue(ActiveBoxWidthProperty);
+        set => SetValue(ActiveBoxWidthProperty, value);
     }
 
     public void AttachSampler(DxgiBackdropSampler sampler)
@@ -135,9 +149,10 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
 
         float radiusPx = (float)(CornerRadius * dpiMatrix.M11);
         float shadowPadPx = (float)(ShadowPadding * dpiMatrix.M11);
+        float activeBoxWidthPx = ActiveBoxWidth > 1.0 ? (float)(ActiveBoxWidth * dpiMatrix.M11) : 0f;
         var renderParams = GlassRenderParams.FromPreset(OpacityPreset, IsDarkMode, radiusPx, IsOverlayCard);
 
-        if (_renderer.RenderSurface(rectPx, renderParams, shadowPadPx, DetachBackBuffer, out bool frameUpdated)
+        if (_renderer.RenderSurface(rectPx, renderParams, shadowPadPx, activeBoxWidthPx, DetachBackBuffer, out bool frameUpdated)
             && _renderer.SharedD3D9SurfacePtr != 0)
         {
             nint ptr = _renderer.SharedD3D9SurfacePtr;

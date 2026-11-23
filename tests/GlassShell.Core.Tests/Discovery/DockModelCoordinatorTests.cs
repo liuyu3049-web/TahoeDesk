@@ -87,4 +87,27 @@ public sealed class DockModelCoordinatorTests
         Assert.True(DockModelCoordinator.AreEquivalent(a, b));
         Assert.False(DockModelCoordinator.AreEquivalent(a, c));
     }
+
+    [Fact]
+    public void BuildDockItems_PreservesStableOrder_WhenClickedAppMovesToFrontOfZOrder()
+    {
+        var order = new[] { @"C:\App\Terminal.exe", @"C:\App\WeChat.exe", @"C:\App\Codex.exe" };
+        // User clicked Codex -> EnumWindows now returns Codex FIRST in Z-order!
+        var runningAfterClick = new[]
+        {
+            new WindowInfo(30, 300, @"C:\App\Codex.exe", "Codex", "Codex", "W", false, false),
+            new WindowInfo(10, 100, @"C:\App\Terminal.exe", "终端", "PS", "W", false, false),
+            new WindowInfo(20, 200, @"C:\App\WeChat.exe", "微信", "微信", "W", false, false)
+        };
+
+        var items = DockModelCoordinator.BuildDockItems(
+            GlassSettings.Default,
+            runningAfterClick,
+            [],
+            new RecycleBinStatus(true, 0, 0),
+            stableRunningOrder: order);
+
+        var middle = items.Where(i => i.Section == DockSection.RunningOrRecent).Select(i => i.TargetPath).ToList();
+        Assert.Equal(order, middle);
+    }
 }

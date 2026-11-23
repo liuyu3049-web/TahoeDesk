@@ -288,12 +288,12 @@ public partial class DockWindow : Window
                     PixelFormats.Bgra32, null, raw.BgraPixels, raw.Width * 4);
                 bmp.Freeze();
 
-                // Pure silhouette icon without square backing plate (per user preference)
+                // Pure silhouette icon with normalized optical diameter (no square backing plate)
                 return new Image
                 {
                     Source = bmp,
                     Stretch = Stretch.Uniform,
-                    Margin = new Thickness(1)
+                    Margin = new Thickness(3)
                 };
             }
         }
@@ -301,14 +301,14 @@ public partial class DockWindow : Window
         return new System.Windows.Shapes.Ellipse
         {
             Fill = new LinearGradientBrush(Color.FromRgb(0x5A, 0xC8, 0xFA), Color.FromRgb(0x0A, 0x84, 0xFF), 45),
-            Margin = new Thickness(4)
+            Margin = new Thickness(5)
         };
     }
 
     private static UIElement BuildExplorerVectorIcon()
     {
-        // Transparent-background macOS-style layered blue folder silhouette (no square box)
-        var grid = new Grid { Margin = new Thickness(2) };
+        // Transparent-background macOS-style layered blue folder silhouette matching normalized icon diameter
+        var grid = new Grid { Margin = new Thickness(4) };
         grid.Children.Add(new System.Windows.Shapes.Path
         {
             Data = Geometry.Parse("M2,6.5 C2,4.8 3.3,3.5 5,3.5 H10.2 C11.1,3.5 11.9,3.9 12.5,4.6 L13.8,6.2 H21 C22.7,6.2 24,7.5 24,9.2 V19.2 C24,20.9 22.7,22.2 21,22.2 H5 C3.3,22.2 2,20.9 2,19.2 Z"),
@@ -458,8 +458,13 @@ public partial class DockWindow : Window
         double canvasWidth = Math.Max(64, layout.TotalWidth);
         double halfCanvas = canvasWidth * 0.5;
 
-        IconsCanvas.Width = canvasWidth;
-        CapsuleGlass.Width = canvasWidth + CapsuleHorizontalPadDip * 2 + CapsuleShadowPadDip * 2;
+        if (Math.Abs(IconsCanvas.Width - canvasWidth) > 0.25)
+        {
+            IconsCanvas.Width = canvasWidth;
+        }
+
+        // Animate Squircle capsule width purely inside HLSL constant buffer (ZERO GPU texture resize/realloc!)
+        CapsuleGlass.ActiveBoxWidth = canvasWidth + CapsuleHorizontalPadDip * 2;
 
         DockSlotVisual? hoveredVisual = null;
         double hoveredIconCenterX = 0;
