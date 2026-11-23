@@ -1,5 +1,8 @@
 using System;
 using System.Runtime.InteropServices;
+using System.Windows;
+using System.Windows.Interop;
+using System.Windows.Media;
 using Microsoft.Win32;
 
 namespace GlassShell.UI.Glass;
@@ -19,8 +22,22 @@ public static class WindowInteropHelperEx
         style |= WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE;
         SetWindowLongPtrW(hwnd, GWL_EXSTYLE, style);
 
-        // Exclude GlassShell's own windows from DXGI desktop duplication so glass never self-samples.
+        ExcludeFromCapture(hwnd);
+    }
+
+    public static void ExcludeFromCapture(nint hwnd)
+    {
+        if (hwnd == 0) return;
         SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE);
+    }
+
+    public static void ExcludeVisualFromCapture(Visual? visual)
+    {
+        if (visual is null) return;
+        if (PresentationSource.FromVisual(visual) is HwndSource src && src.Handle != 0)
+        {
+            ExcludeFromCapture(src.Handle);
+        }
     }
 
     public static bool IsSystemDarkTheme()

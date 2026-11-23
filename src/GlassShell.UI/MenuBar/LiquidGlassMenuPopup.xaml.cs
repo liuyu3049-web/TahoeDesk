@@ -34,6 +34,7 @@ public partial class LiquidGlassMenuPopup : Popup
     public LiquidGlassMenuPopup()
     {
         InitializeComponent();
+        Opened += (_, _) => WindowInteropHelperEx.ExcludeVisualFromCapture(Child);
         Closed += (_, _) => CloseSubmenu();
     }
 

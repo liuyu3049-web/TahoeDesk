@@ -141,6 +141,12 @@ public partial class App : Application
     {
         if (_primaryMonitor is null || _taskbarController is null || _taskbarNative is null) return;
 
+        uint selfPid = (uint)Environment.ProcessId;
+        if (fg.ProcessId == selfPid)
+        {
+            return;
+        }
+
         bool isFs = FullscreenDetector.IsFullscreen(fg, _primaryMonitor, _taskbarNative.IsD3DFullscreenActive());
         _taskbarController.UpdateFullscreenState(isFs);
 
@@ -154,7 +160,7 @@ public partial class App : Application
         if (_menuCoordinator is not null && fg.Hwnd != 0)
         {
             string displayName = string.IsNullOrWhiteSpace(fg.ProcessName) ? "桌面" : fg.ProcessName;
-            _ = _menuCoordinator.OnForegroundChangedAsync(fg.Hwnd, 0, fg.ProcessName, displayName);
+            _ = _menuCoordinator.OnForegroundChangedAsync(fg.Hwnd, fg.ProcessId, fg.ProcessName, displayName);
         }
     }
 

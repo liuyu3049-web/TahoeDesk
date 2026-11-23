@@ -39,6 +39,8 @@ public partial class QuickSettingsWindow : Window
         RecentAppsCheck.IsChecked = settings.ShowRecentApps;
         _loading = false;
 
+        SourceInitialized += (_, _) => WindowInteropHelperEx.ExcludeFromCapture(new System.Windows.Interop.WindowInteropHelper(this).Handle);
+        Closed += (_, _) => GlassBackdrop.Dispose();
         MouseLeftButtonDown += (_, _) =>
         {
             try { DragMove(); } catch { }

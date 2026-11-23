@@ -83,7 +83,7 @@ public sealed class WindowTracker : IWindowTracker
         var hwnd = GetForegroundWindow();
         if (hwnd == 0)
         {
-            return new ForegroundWindowInfo(0, string.Empty, string.Empty, new(0, 0, 0, 0), false, false);
+            return new ForegroundWindowInfo(0, 0, string.Empty, string.Empty, new(0, 0, 0, 0), false, false);
         }
 
         string className = GetClassName(hwnd);
@@ -93,7 +93,7 @@ public sealed class WindowTracker : IWindowTracker
         GetWindowRect(hwnd, out RECT rc);
         bool minimized = IsIconic(hwnd);
         bool cloaked = IsCloaked(hwnd);
-        return new ForegroundWindowInfo(hwnd, className, procName, new(rc.Left, rc.Top, rc.Right, rc.Bottom), minimized, cloaked);
+        return new ForegroundWindowInfo(hwnd, pid, className, procName, new(rc.Left, rc.Top, rc.Right, rc.Bottom), minimized, cloaked);
     }
 
     public static bool ActivateWindow(nint hwnd)

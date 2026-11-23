@@ -20,6 +20,8 @@ public partial class AboutPcDialog : Window
         double ramGb = GC.GetGCMemoryInfo().TotalAvailableMemoryBytes / (1024.0 * 1024.0 * 1024.0);
         MemoryText.Text = $"{ramGb:F1} GB";
 
+        SourceInitialized += (_, _) => WindowInteropHelperEx.ExcludeFromCapture(new System.Windows.Interop.WindowInteropHelper(this).Handle);
+        Closed += (_, _) => GlassBackdrop.Dispose();
         MouseLeftButtonDown += (_, _) => DragMove();
     }
 

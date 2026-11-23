@@ -155,5 +155,31 @@ public static class DockModelCoordinator
         return items;
     }
 
+    public static bool AreEquivalent(IReadOnlyList<DockItemModel> left, IReadOnlyList<DockItemModel> right)
+    {
+        if (ReferenceEquals(left, right)) return true;
+        if (left.Count != right.Count) return false;
+
+        for (int i = 0; i < left.Count; i++)
+        {
+            var a = left[i];
+            var b = right[i];
+            if (!string.Equals(a.Id, b.Id, StringComparison.OrdinalIgnoreCase)
+                || !string.Equals(a.Title, b.Title, StringComparison.Ordinal)
+                || a.Kind != b.Kind
+                || a.Section != b.Section
+                || a.IsPinned != b.IsPinned
+                || a.IsRunning != b.IsRunning
+                || a.IsFlashing != b.IsFlashing
+                || a.IsRecycleBinEmpty != b.IsRecycleBinEmpty
+                || a.OpenWindowHandles.Count != b.OpenWindowHandles.Count)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
     private static string NormalizePath(string path) => path.Trim().TrimEnd('\\');
 }

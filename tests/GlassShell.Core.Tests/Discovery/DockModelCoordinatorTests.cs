@@ -76,4 +76,15 @@ public sealed class DockModelCoordinatorTests
         var items = DockModelCoordinator.BuildDockItems(settings, [], recents, new RecycleBinStatus(true, 0, 0));
         Assert.DoesNotContain(items, i => i.Section == DockSection.RunningOrRecent);
     }
+
+    [Fact]
+    public void AreEquivalent_ReturnsTrueForUnchangedSnapshots_FalseWhenRunningOrRecycleBinChanges()
+    {
+        var a = DockModelCoordinator.BuildDockItems(GlassSettings.Default, [], [], new RecycleBinStatus(true, 0, 0));
+        var b = DockModelCoordinator.BuildDockItems(GlassSettings.Default, [], [], new RecycleBinStatus(true, 0, 0));
+        var c = DockModelCoordinator.BuildDockItems(GlassSettings.Default, [], [], new RecycleBinStatus(false, 1, 128));
+
+        Assert.True(DockModelCoordinator.AreEquivalent(a, b));
+        Assert.False(DockModelCoordinator.AreEquivalent(a, c));
+    }
 }

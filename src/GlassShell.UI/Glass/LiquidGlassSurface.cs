@@ -28,16 +28,20 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
 
     private readonly D3DImage _d3dImage = new();
     private LiquidGlassRenderer? _renderer;
+    private nint _boundSurfacePtr;
     private bool _hasValidFrame;
 
     public LiquidGlassSurface()
     {
         IsHitTestVisible = false;
-        Loaded += (_, _) => CompositionTarget.Rendering += OnRendering;
+        Loaded += (_, _) =>
+        {
+            CompositionTarget.Rendering -= OnRendering;
+            CompositionTarget.Rendering += OnRendering;
+        };
         Unloaded += (_, _) =>
         {
             CompositionTarget.Rendering -= OnRendering;
-            Dispose();
         };
     }
 
@@ -93,12 +97,19 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
         float shadowPadPx = (float)(ShadowPadding * dpiMatrix.M11);
         var renderParams = GlassRenderParams.FromPreset(OpacityPreset, IsDarkMode, radiusPx);
 
-        if (_renderer.RenderSurface(rectPx, renderParams, shadowPadPx) && _renderer.SharedD3D9SurfacePtr != 0)
+        if (_d3dImage.IsFrontBufferAvailable
+            && _renderer.RenderSurface(rectPx, renderParams, shadowPadPx)
+            && _renderer.SharedD3D9SurfacePtr != 0)
         {
             _d3dImage.Lock();
             try
             {
-                _d3dImage.SetBackBuffer(D3DResourceType.IDirect3DSurface9, _renderer.SharedD3D9SurfacePtr, enableSoftwareFallback: true);
+                nint ptr = _renderer.SharedD3D9SurfacePtr;
+                if (_boundSurfacePtr != ptr)
+                {
+                    _d3dImage.SetBackBuffer(D3DResourceType.IDirect3DSurface9, ptr, enableSoftwareFallback: true);
+                    _boundSurfacePtr = ptr;
+                }
                 if (_d3dImage.PixelWidth > 0 && _d3dImage.PixelHeight > 0)
                 {
                     _d3dImage.AddDirtyRect(new Int32Rect(0, 0, _d3dImage.PixelWidth, _d3dImage.PixelHeight));
@@ -115,6 +126,7 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
         else if (_hasValidFrame)
         {
             _hasValidFrame = false;
+            _boundSurfacePtr = 0;
             InvalidateVisual();
         }
     }

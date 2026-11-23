@@ -24,6 +24,8 @@ public partial class ForceQuitWindow : Window
         if (sampler is not null) GlassBackdrop.AttachSampler(sampler);
 
         RefreshList();
+        SourceInitialized += (_, _) => WindowInteropHelperEx.ExcludeFromCapture(new System.Windows.Interop.WindowInteropHelper(this).Handle);
+        Closed += (_, _) => GlassBackdrop.Dispose();
         MouseLeftButtonDown += (_, _) => DragMove();
     }
 

@@ -19,6 +19,7 @@ public partial class CalendarPopup : Popup
         InitializeComponent();
         Opened += (_, _) =>
         {
+            WindowInteropHelperEx.ExcludeVisualFromCapture(Child);
             _displayMonth = new DateTime(DateTime.Now.Year, DateTime.Now.Month, 1);
             RenderMonth();
         };

@@ -63,6 +63,7 @@ public sealed record MonitorContext(nint MonitorHandle, ScreenRect Bounds, doubl
 
 public readonly record struct ForegroundWindowInfo(
     nint Hwnd,
+    uint ProcessId,
     string ClassName,
     string ProcessName,
     ScreenRect Bounds,

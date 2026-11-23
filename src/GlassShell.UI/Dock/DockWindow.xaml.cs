@@ -49,9 +49,11 @@ public partial class DockWindow : Window
 
     private GlassSettings _settings;
     private bool _isDarkMode;
+    private IReadOnlyList<DockItemModel> _lastItems = [];
     private double? _rawPointerX;
     private double _smoothedPointerX;
     private bool _pointerActive;
+    private double? _bottomEdgeEnterMs;
     private double _currentSlideY;
     private bool _yieldForTray;
     private bool _hasBottomOverlap;
@@ -114,7 +116,15 @@ public partial class DockWindow : Window
 
     public void UpdateItems(IReadOnlyList<DockItemModel> items)
     {
-        Dispatcher.InvokeAsync(() => RebuildVisualSlots(items));
+        Dispatcher.InvokeAsync(() =>
+        {
+            if (DockModelCoordinator.AreEquivalent(_lastItems, items))
+            {
+                return;
+            }
+            _lastItems = items;
+            RebuildVisualSlots(items);
+        });
     }
 
     private void RebuildVisualSlots(IReadOnlyList<DockItemModel> items)
@@ -392,11 +402,32 @@ public partial class DockWindow : Window
 
         LayoutFrame();
 
+        bool isAtBottomEdge = false;
+        double dwellMs = 0;
+        if (GetCursorPos(out POINT cursorPx))
+        {
+            bool withinMonitorX = cursorPx.X >= _monitor.Bounds.Left && cursorPx.X <= _monitor.Bounds.Right;
+            bool nearBottom = cursorPx.Y >= _monitor.Bounds.Bottom - 4 && cursorPx.Y <= _monitor.Bounds.Bottom;
+            bool insideRevealedDock = _currentSlideY < 10.0 && cursorPx.Y >= _monitor.Bounds.Bottom - (int)(Height * _monitor.DpiScale);
+
+            if (withinMonitorX && (nearBottom || insideRevealedDock))
+            {
+                isAtBottomEdge = true;
+                double nowMs = _clock.Elapsed.TotalMilliseconds;
+                _bottomEdgeEnterMs ??= insideRevealedDock ? nowMs - DockAutoHideController.DefaultTriggerDelayMs : nowMs;
+                dwellMs = nowMs - _bottomEdgeEnterMs.Value;
+            }
+            else
+            {
+                _bottomEdgeEnterMs = null;
+            }
+        }
+
         bool shouldHide = _yieldForTray || _autoHideController.ShouldHide(
             _settings.DockAutoHide,
             _hasBottomOverlap,
-            isPointerAtBottomEdge: _pointerActive,
-            bottomEdgeDwellMs: _pointerActive ? DockAutoHideController.DefaultTriggerDelayMs : 0,
+            isPointerAtBottomEdge: isAtBottomEdge || _pointerActive,
+            bottomEdgeDwellMs: _pointerActive ? DockAutoHideController.DefaultTriggerDelayMs : dwellMs,
             isMenuOrDragActive: _contextMenu.IsOpen || _draggingItem is not null);
 
         double targetSlideY = shouldHide ? 104.0 : 0.0;
@@ -661,4 +692,11 @@ public partial class DockWindow : Window
         }
         catch { }
     }
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    private struct POINT { public int X; public int Y; }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    [return: System.Runtime.InteropServices.MarshalAs(System.Runtime.InteropServices.UnmanagedType.Bool)]
+    private static extern bool GetCursorPos(out POINT lpPoint);
 }
