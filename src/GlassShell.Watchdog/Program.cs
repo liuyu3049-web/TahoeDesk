@@ -82,10 +82,11 @@ internal static class Program
 
     private static void RestoreTaskbar()
     {
-        nint tray = FindWindowW("Shell_TrayWnd", null);
-        if (tray != 0)
+        nint tray = FindWindowExW(0, 0, "Shell_TrayWnd", null);
+        while (tray != 0)
         {
             ShowWindow(tray, SW_SHOW);
+            tray = FindWindowExW(0, tray, "Shell_TrayWnd", null);
         }
 
         nint secondary = FindWindowExW(0, 0, "Shell_SecondaryTrayWnd", null);
@@ -93,6 +94,13 @@ internal static class Program
         {
             ShowWindow(secondary, SW_SHOW);
             secondary = FindWindowExW(0, secondary, "Shell_SecondaryTrayWnd", null);
+        }
+
+        // Ask all running tray apps to re-register their icons back onto Explorer's native taskbar
+        uint msg = RegisterWindowMessageW("TaskbarCreated");
+        if (msg != 0)
+        {
+            SendNotifyMessageW(new nint(0xFFFF), msg, 0, 0);
         }
     }
 
@@ -118,4 +126,11 @@ internal static class Program
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool ShowWindow(nint hWnd, int nCmdShow);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern uint RegisterWindowMessageW(string lpString);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SendNotifyMessageW(nint hWnd, uint msg, nint wParam, nint lParam);
 }

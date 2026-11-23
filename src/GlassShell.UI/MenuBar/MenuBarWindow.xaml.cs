@@ -1,18 +1,23 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
+using System.Windows.Media;
+using System.Windows.Shapes;
 using System.Windows.Threading;
 using GlassShell.Core.Config;
 using GlassShell.Core.Discovery;
 using GlassShell.Core.MenuEngine;
 using GlassShell.Core.Shell;
 using GlassShell.Core.SystemStatus;
+using GlassShell.Core.Tray;
 using GlassShell.UI.Glass;
+using GlassShell.UI.Tray;
 
 namespace GlassShell.UI.MenuBar;
 
@@ -24,11 +29,15 @@ public partial class MenuBarWindow : Window
     private readonly TaskbarController _taskbarController;
     private readonly IWindowTracker _windowTracker;
     private readonly DxgiBackdropSampler _sampler;
+    private readonly TrayProxyHost _trayProxyHost;
     private readonly LiquidGlassMenuPopup _menuPopup = new();
     private readonly CalendarPopup _calendarPopup = new();
+    private readonly TrayOverflowPopup _trayOverflowPopup = new();
     private readonly DispatcherTimer _statusTimer;
 
     private MonitorContext _monitor;
+    private GlassSettings _settings;
+    private IReadOnlyList<TrayDisplayItem> _lastTrayItems = [];
     private Button? _activeMenuButton;
     private uint _taskbarCreatedMsg;
 
@@ -37,6 +46,7 @@ public partial class MenuBarWindow : Window
         TaskbarController taskbarController,
         IWindowTracker windowTracker,
         DxgiBackdropSampler sampler,
+        TrayProxyHost trayProxyHost,
         GlassSettings settings,
         bool isDarkMode)
     {
@@ -45,10 +55,16 @@ public partial class MenuBarWindow : Window
         _taskbarController = taskbarController;
         _windowTracker = windowTracker;
         _sampler = sampler;
+        _trayProxyHost = trayProxyHost;
+        _settings = settings;
         DataContext = _vm;
 
         BarGlassBackdrop.AttachSampler(sampler);
         _menuPopup.Closed += (_, _) => ClearActiveMenuButton();
+        _trayOverflowPopup.Closed += (_, _) => TrayOverflowButton.Tag = null;
+        _trayOverflowPopup.TrayIconInvoked += HandleTrayIconInvoked;
+        _trayOverflowPopup.TrayIconPinToggled += HandleTrayIconPinToggled;
+        _trayOverflowPopup.NativeTaskbarPeekRequested += ToggleNativeTaskbarPeek;
         ApplySettings(settings, isDarkMode);
         PositionToMonitor(monitor);
 
@@ -67,16 +83,26 @@ public partial class MenuBarWindow : Window
     public event Action? ControlCenterRequested;
     public event Action? SettingsRequested;
     public event Action? RestoreNativeTaskbarRequested;
+    public event Action<GlassSettings>? SettingsUpdated;
 
     public void ApplySettings(GlassSettings settings, bool isDarkMode)
     {
+        _settings = settings;
         _vm.ApplySettings(settings, isDarkMode);
         BarGlassBackdrop.OpacityPreset = settings.OpacityPreset;
         BarGlassBackdrop.IsDarkMode = isDarkMode;
         BarGlassBackdrop.Visibility = settings.ShowMenuBarBackground ? Visibility.Visible : Visibility.Collapsed;
         _menuPopup.ConfigureVisuals(_sampler, settings.OpacityPreset, isDarkMode);
         _calendarPopup.ConfigureVisuals(_sampler, settings.OpacityPreset, isDarkMode);
+        _trayOverflowPopup.ConfigureVisuals(_sampler, settings.OpacityPreset, isDarkMode);
         UpdateTopBarInk(settings.ShowMenuBarBackground, isDarkMode);
+        RebuildTrayVisuals();
+    }
+
+    public void UpdateTrayItems(IReadOnlyList<TrayDisplayItem> items)
+    {
+        _lastTrayItems = items;
+        RebuildTrayVisuals();
     }
 
     public void DismissPopups()
@@ -85,6 +111,7 @@ public partial class MenuBarWindow : Window
         {
             _menuPopup.IsOpen = false;
             _calendarPopup.IsOpen = false;
+            _trayOverflowPopup.IsOpen = false;
         });
     }
 
@@ -149,6 +176,7 @@ public partial class MenuBarWindow : Window
         WindowInteropHelperEx.ApplyShellOverlayStyles(hwnd);
         _menuPopup.OwnerAnchorHwnd = hwnd;
         _calendarPopup.OwnerAnchorHwnd = hwnd;
+        _trayOverflowPopup.OwnerAnchorHwnd = hwnd;
 
         _taskbarCreatedMsg = RegisterWindowMessageW("TaskbarCreated");
         HwndSource.FromHwnd(hwnd)?.AddHook(WndProc);
@@ -156,9 +184,13 @@ public partial class MenuBarWindow : Window
 
     private nint WndProc(nint hwnd, int msg, nint wParam, nint lParam, ref bool handled)
     {
-        if (_taskbarCreatedMsg != 0 && (uint)msg == _taskbarCreatedMsg)
+        if (_taskbarCreatedMsg != 0 && (uint)msg == _taskbarCreatedMsg && !_trayProxyHost.IsSelfBroadcastActive)
         {
             _taskbarController.HandleExplorerRestart();
+            if (_monitor.IsPrimary)
+            {
+                _trayProxyHost.HandleExternalExplorerRestart();
+            }
         }
         return 0;
     }
@@ -184,6 +216,7 @@ public partial class MenuBarWindow : Window
         {
             _menuPopup.IsOpen = false;
             _calendarPopup.IsOpen = false;
+            _trayOverflowPopup.IsOpen = false;
         }
     }
 
@@ -236,6 +269,7 @@ public partial class MenuBarWindow : Window
     private void OpenMenu(Button button, IReadOnlyList<PopupMenuEntry> entries)
     {
         _calendarPopup.IsOpen = false;
+        _trayOverflowPopup.IsOpen = false;
         ClearActiveMenuButton();
         _activeMenuButton = button;
         button.Tag = "Active";
@@ -291,18 +325,220 @@ public partial class MenuBarWindow : Window
         new($"退出 {_vm.ActiveAppName}", "Alt+F4", OnClick: () => _dispatcher.Dispatch(_vm.ActiveTargetHwnd, new MenuInvokeAction(MenuActionKind.WindowCommand, WindowOp: "close")))
     ];
 
-    private void OnTrayPeekClick(object sender, RoutedEventArgs e)
+    private void RebuildTrayVisuals()
+    {
+        InlineTrayPanel.Children.Clear();
+
+        var records = _lastTrayItems.Select(i => i.Record).ToList();
+        var bitmapByKey = _lastTrayItems.ToDictionary(i => i.Record.Key, i => i);
+        var (barRecs, overflowRecs) = TrayIconRegistry.PartitionForMenuBar(
+            records,
+            _settings.PinnedTrayIconKeys,
+            defaultInlineCount: 4);
+
+        var inlineTiles = new List<(TrayDisplayItem Item, Border Tile)>(barRecs.Count);
+        foreach (var rec in barRecs)
+        {
+            var item = bitmapByKey[rec.Key];
+            var tile = BuildInlineTrayTile(item);
+            InlineTrayPanel.Children.Add(tile);
+            inlineTiles.Add((item, tile));
+        }
+
+        var overflowItems = overflowRecs.Select(r => bitmapByKey[r.Key]).ToList();
+        _trayOverflowPopup.Populate(overflowItems);
+        _trayOverflowPopup.UpdateNativePeekLabel(_taskbarController.IsTrayPeekActive);
+
+        TrayOverflowButton.ToolTip = overflowItems.Count > 0
+            ? $"已收纳 {overflowItems.Count} 个托盘图标（点击展开）"
+            : "系统托盘与原生任务栏选项";
+
+        if (_monitor.IsPrimary && inlineTiles.Count > 0)
+        {
+            Dispatcher.BeginInvoke(DispatcherPriority.Loaded, () =>
+            {
+                foreach (var (item, tile) in inlineTiles)
+                {
+                    if (!tile.IsLoaded || tile.ActualWidth < 2) continue;
+                    try
+                    {
+                        var tl = tile.PointToScreen(new Point(0, 0));
+                        var br = tile.PointToScreen(new Point(tile.ActualWidth, tile.ActualHeight));
+                        _trayProxyHost.UpdateIconScreenRect(item.Record.Key, new ScreenRect(
+                            (int)Math.Round(tl.X),
+                            (int)Math.Round(tl.Y),
+                            (int)Math.Round(br.X),
+                            (int)Math.Round(br.Y)));
+                    }
+                    catch { }
+                }
+            });
+        }
+    }
+
+    private Border BuildInlineTrayTile(TrayDisplayItem item)
+    {
+        UIElement iconEl;
+        if (item.IconBitmap is not null)
+        {
+            var img = new Image
+            {
+                Source = item.IconBitmap,
+                Width = 16,
+                Height = 16,
+                Stretch = Stretch.Uniform,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            RenderOptions.SetBitmapScalingMode(img, BitmapScalingMode.HighQuality);
+            iconEl = img;
+        }
+        else
+        {
+            iconEl = new Ellipse
+            {
+                Width = 8,
+                Height = 8,
+                Fill = Resources["MenuBarForegroundBrush"] as Brush ?? Brushes.White
+            };
+        }
+
+        var tile = new Border
+        {
+            Width = 24,
+            Height = 22,
+            Margin = new Thickness(1, 0, 1, 0),
+            CornerRadius = new CornerRadius(5),
+            Background = Brushes.Transparent,
+            Cursor = Cursors.Hand,
+            ToolTip = string.IsNullOrWhiteSpace(item.Record.Tooltip) ? "托盘应用" : item.Record.Tooltip,
+            Child = iconEl
+        };
+
+        tile.MouseEnter += (_, _) => tile.Background = Resources["MenuBarHoverBrush"] as Brush ?? Brushes.Transparent;
+        tile.MouseLeave += (_, _) => tile.Background = Brushes.Transparent;
+
+        tile.MouseLeftButtonDown += (_, e) =>
+        {
+            e.Handled = true;
+            if ((Keyboard.Modifiers & ModifierKeys.Shift) != 0)
+            {
+                HandleTrayIconPinToggled(item);
+                return;
+            }
+
+            var (rect, pt) = CaptureTileMetrics(tile);
+            var action = e.ClickCount >= 2 ? TrayMouseAction.LeftDoubleClick : TrayMouseAction.LeftClick;
+            HandleTrayIconInvoked(item, action, rect, pt);
+        };
+
+        tile.MouseRightButtonUp += (_, e) =>
+        {
+            e.Handled = true;
+            var (rect, pt) = CaptureTileMetrics(tile);
+            HandleTrayIconInvoked(item, TrayMouseAction.RightClick, rect, pt);
+        };
+
+        tile.MouseUp += (_, e) =>
+        {
+            if (e.ChangedButton == MouseButton.Middle)
+            {
+                e.Handled = true;
+                var (rect, pt) = CaptureTileMetrics(tile);
+                HandleTrayIconInvoked(item, TrayMouseAction.MiddleClick, rect, pt);
+            }
+        };
+
+        return tile;
+    }
+
+    private static (ScreenRect Rect, Point AnchorPoint) CaptureTileMetrics(FrameworkElement tile)
+    {
+        try
+        {
+            var tl = tile.PointToScreen(new Point(0, 0));
+            var br = tile.PointToScreen(new Point(tile.ActualWidth, tile.ActualHeight));
+            var rect = new ScreenRect(
+                (int)Math.Round(tl.X),
+                (int)Math.Round(tl.Y),
+                (int)Math.Round(br.X),
+                (int)Math.Round(br.Y));
+            return (rect, new Point((tl.X + br.X) * 0.5, br.Y));
+        }
+        catch
+        {
+            return (default, new Point(0, 0));
+        }
+    }
+
+    private void HandleTrayIconInvoked(TrayDisplayItem item, TrayMouseAction action, ScreenRect rectPx, Point anchorPtPx)
+    {
+        _menuPopup.IsOpen = false;
+        _calendarPopup.IsOpen = false;
+        if (rectPx.Width > 0 && rectPx.Height > 0)
+        {
+            _trayProxyHost.UpdateIconScreenRect(item.Record.Key, rectPx);
+        }
+        _trayProxyHost.DispatchMouseAction(
+            item.Record,
+            action,
+            (int)Math.Round(anchorPtPx.X),
+            (int)Math.Round(anchorPtPx.Y));
+    }
+
+    private void HandleTrayIconPinToggled(TrayDisplayItem item)
+    {
+        var currentRecords = _lastTrayItems.Select(i => i.Record).ToList();
+        var pinned = _settings.PinnedTrayIconKeys.Count > 0
+            ? new List<string>(_settings.PinnedTrayIconKeys)
+            : TrayIconRegistry.PartitionForMenuBar(currentRecords, null, defaultInlineCount: 4)
+                .BarIcons.Select(r => r.PreferenceKey).ToList();
+
+        string key = item.Record.PreferenceKey;
+        int existingIdx = pinned.FindIndex(k => string.Equals(k, key, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(k, item.Record.Key.StablePreferenceId, StringComparison.OrdinalIgnoreCase));
+        if (existingIdx >= 0)
+        {
+            pinned.RemoveAt(existingIdx);
+        }
+        else
+        {
+            pinned.Add(key);
+        }
+
+        SettingsUpdated?.Invoke(_settings with { PinnedTrayIconKeys = pinned });
+    }
+
+    private void OnTrayOverflowClick(object sender, RoutedEventArgs e)
+    {
+        _menuPopup.IsOpen = false;
+        _calendarPopup.IsOpen = false;
+
+        if (_trayOverflowPopup.IsOpen)
+        {
+            _trayOverflowPopup.IsOpen = false;
+            return;
+        }
+
+        _trayOverflowPopup.UpdateNativePeekLabel(_taskbarController.IsTrayPeekActive);
+        _trayOverflowPopup.PlacementTarget = TrayOverflowButton;
+        _trayOverflowPopup.HorizontalOffset = -92;
+        _trayOverflowPopup.VerticalOffset = 4;
+        TrayOverflowButton.Tag = "Active";
+        _trayOverflowPopup.IsOpen = true;
+    }
+
+    private void ToggleNativeTaskbarPeek()
     {
         if (_taskbarController.IsTrayPeekActive)
         {
             _taskbarController.EndTrayPeek();
-            TrayPeekButton.Tag = null;
         }
         else
         {
             _taskbarController.BeginTrayPeek();
-            TrayPeekButton.Tag = "Active";
         }
+        _trayOverflowPopup.UpdateNativePeekLabel(_taskbarController.IsTrayPeekActive);
     }
 
     private void OnImeClick(object sender, RoutedEventArgs e)
@@ -316,6 +552,7 @@ public partial class MenuBarWindow : Window
     private void OnClockClick(object sender, RoutedEventArgs e)
     {
         _menuPopup.IsOpen = false;
+        _trayOverflowPopup.IsOpen = false;
         if (_calendarPopup.IsOpen)
         {
             _calendarPopup.IsOpen = false;

@@ -14,7 +14,26 @@ public sealed class Win32TaskbarNative : ITaskbarNative
     private const uint ABE_TOP = 1;
     private const int QUNS_RUNNING_D3D_FULL_SCREEN = 3;
 
-    public nint FindPrimaryTaskbar() => FindWindowW("Shell_TrayWnd", null);
+    public nint FindPrimaryTaskbar() => FindExplorerPrimaryTaskbar();
+
+    /// <summary>
+    /// Locates Windows Explorer's real Shell_TrayWnd while skipping GlassShell's own tray proxy window.
+    /// </summary>
+    public static nint FindExplorerPrimaryTaskbar()
+    {
+        uint selfPid = (uint)Environment.ProcessId;
+        nint candidate = FindWindowExW(0, 0, "Shell_TrayWnd", null);
+        while (candidate != 0)
+        {
+            GetWindowThreadProcessId(candidate, out uint pid);
+            if (pid != 0 && pid != selfPid)
+            {
+                return candidate;
+            }
+            candidate = FindWindowExW(0, candidate, "Shell_TrayWnd", null);
+        }
+        return 0;
+    }
 
     public bool SetWindowVisible(nint hwnd, bool visible)
     {
@@ -90,7 +109,7 @@ public sealed class Win32TaskbarNative : ITaskbarNative
 
     public static void RestorePrimaryTaskbarNow()
     {
-        var hwnd = FindWindowW("Shell_TrayWnd", null);
+        var hwnd = FindExplorerPrimaryTaskbar();
         if (hwnd != 0)
         {
             ShowWindow(hwnd, SW_SHOW);
@@ -101,6 +120,12 @@ public sealed class Win32TaskbarNative : ITaskbarNative
         {
             ShowWindow(sec, SW_SHOW);
             sec = FindWindowExW(0, sec, "Shell_SecondaryTrayWnd", null);
+        }
+
+        uint msg = RegisterWindowMessageW("TaskbarCreated");
+        if (msg != 0)
+        {
+            SendNotifyMessageW(new nint(0xFFFF), msg, 0, 0);
         }
     }
 
@@ -123,6 +148,16 @@ public sealed class Win32TaskbarNative : ITaskbarNative
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern nint FindWindowExW(nint hwndParent, nint hwndChildAfter, string lpszClass, string? lpszWindow);
+
+    [DllImport("user32.dll")]
+    private static extern uint GetWindowThreadProcessId(nint hWnd, out uint lpdwProcessId);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern uint RegisterWindowMessageW(string lpString);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SendNotifyMessageW(nint hWnd, uint msg, nint wParam, nint lParam);
 
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]

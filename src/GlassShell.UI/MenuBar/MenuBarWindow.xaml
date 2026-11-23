@@ -64,15 +64,20 @@
                 </ItemsControl>
             </StackPanel>
 
-            <!-- Trailing: Tray Peek + IME + Battery + Network + Spotlight + Control Center + Clock -->
+            <!-- Trailing: Folded Tray Toggle + Inline Tray Icons + IME + Battery + Network + Spotlight + Control Center + Clock -->
             <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
-                <Button x:Name="TrayPeekButton"
+                <Button x:Name="TrayOverflowButton"
                         Style="{StaticResource MenuBarButtonStyle}"
                         Padding="6,0"
-                        ToolTip="临时展开系统托盘"
-                        Click="OnTrayPeekClick">
-                    <TextBlock Text="⌃" FontSize="12" VerticalAlignment="Center" />
+                        ToolTip="折叠托盘与更多选项"
+                        Click="OnTrayOverflowClick">
+                    <TextBlock x:Name="TrayOverflowGlyph" Text="‹" FontSize="14" FontWeight="SemiBold" Margin="0,-1,0,0" VerticalAlignment="Center" />
                 </Button>
+
+                <StackPanel x:Name="InlineTrayPanel"
+                            Orientation="Horizontal"
+                            VerticalAlignment="Center"
+                            Margin="0,0,2,0" />
 
                 <Button x:Name="ImeButton"
                         Style="{StaticResource MenuBarButtonStyle}"

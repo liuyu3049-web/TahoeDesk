@@ -36,6 +36,7 @@ public sealed record GlassSettings
     public bool InterceptWinKeyForLaunchpad { get; init; } = true;
     public IReadOnlyList<string> PinnedAppPaths { get; init; } = [];
     public IReadOnlyList<string> PinnedFolderPaths { get; init; } = [];
+    public IReadOnlyList<string> PinnedTrayIconKeys { get; init; } = [];
 
     public static GlassSettings Default => new();
 }

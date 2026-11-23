@@ -14,6 +14,7 @@ using GlassShell.UI.Dock;
 using GlassShell.UI.Glass;
 using GlassShell.UI.MenuBar;
 using GlassShell.UI.Settings;
+using GlassShell.UI.Tray;
 using Microsoft.Win32;
 
 namespace GlassShell.UI;
@@ -31,6 +32,7 @@ public partial class App : Application
     private WindowTracker? _windowTracker;
     private ForegroundMenuCoordinator? _menuCoordinator;
     private DxgiBackdropSampler? _backdropSampler;
+    private TrayProxyHost? _trayProxyHost;
     private RecycleBinService? _recycleBinService;
     private readonly List<DisplayShellPair> _shells = [];
     private QuickSettingsWindow? _settingsWindow;
@@ -87,6 +89,7 @@ public partial class App : Application
         _windowTracker = new WindowTracker();
         _recycleBinService = new RecycleBinService();
         _backdropSampler = new DxgiBackdropSampler();
+        _trayProxyHost = new TrayProxyHost();
 
         var extractors = new IMenuExtractor[]
         {
@@ -100,10 +103,11 @@ public partial class App : Application
 
         foreach (var monitor in monitors)
         {
-            var menuBar = new MenuBarWindow(monitor, _taskbarController, _windowTracker, _backdropSampler, _settings, isDark);
+            var menuBar = new MenuBarWindow(monitor, _taskbarController, _windowTracker, _backdropSampler, _trayProxyHost, _settings, isDark);
             var dock = new DockWindow(monitor, _backdropSampler, _settings, isDark);
 
             menuBar.SettingsRequested += OpenQuickSettings;
+            menuBar.SettingsUpdated += ApplyUpdatedSettings;
             menuBar.RestoreNativeTaskbarRequested += () =>
             {
                 CleanupSafe();
@@ -157,6 +161,13 @@ public partial class App : Application
         }
 
         _windowTracker.Start();
+
+        // Start zero-injection Shell_TrayWnd tray proxy AFTER AppBar registration so SHAppBarMessage hits Explorer cleanly
+        _trayProxyHost.IconsChanged += items => Dispatcher.InvokeAsync(() =>
+        {
+            foreach (var s in _shells) s.MenuBar.UpdateTrayItems(items);
+        });
+        _trayProxyHost.Start();
 
         RefreshDockItems();
         OnForegroundChanged(_windowTracker.GetForegroundWindowInfo());
@@ -377,7 +388,10 @@ public partial class App : Application
             }
         }
         catch { }
+        // Restore native taskbar visibility FIRST, then destroy our Shell_TrayWnd proxy & broadcast TaskbarCreated
+        // so all running tray apps immediately re-register onto Explorer's restored taskbar.
         try { _taskbarController?.Release(); } catch { }
+        try { _trayProxyHost?.Dispose(); } catch { }
         try { _backdropSampler?.Dispose(); } catch { }
         try { _cleanExitEvent?.Set(); } catch { }
         try { _cleanExitEvent?.Dispose(); } catch { }
