@@ -27,6 +27,9 @@ public sealed class Win32TaskbarNative : ITaskbarNative
     {
         if (appBarHwnd == 0 || heightPx <= 0) return false;
 
+        // Always remove any previous AppBar registration on this HWND first so we never stack twice.
+        UnregisterAppBar(appBarHwnd);
+
         var data = new APPBARDATA
         {
             cbSize = (uint)Marshal.SizeOf<APPBARDATA>(),
@@ -43,7 +46,17 @@ public sealed class Win32TaskbarNative : ITaskbarNative
 
         SHAppBarMessage(ABM_NEW, ref data);
         SHAppBarMessage(ABM_QUERYPOS, ref data);
-        data.rc.Bottom = data.rc.Top + heightPx;
+
+        // If another top AppBar/reserved strip already pushed data.rc.Top down below monitorBounds.Top,
+        // do NOT double-stack a second reservation on top of it (which causes a huge empty gap).
+        if (data.rc.Top > monitorBounds.Top + 4)
+        {
+            UnregisterAppBar(appBarHwnd);
+            return false;
+        }
+
+        data.rc.Top = monitorBounds.Top;
+        data.rc.Bottom = monitorBounds.Top + heightPx;
         SHAppBarMessage(ABM_SETPOS, ref data);
         return true;
     }

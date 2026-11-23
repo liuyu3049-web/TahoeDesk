@@ -2,22 +2,24 @@
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
     <FontFamily x:Key="MacUiFont">Segoe UI Variable Text, Microsoft YaHei UI, Segoe UI</FontFamily>
 
-    <DropShadowEffect x:Key="MenuBarTextShadow"
-                      Color="#88000000"
-                      BlurRadius="5"
-                      ShadowDepth="1"
-                      Direction="270"
-                      Opacity="0.85" />
+    <SolidColorBrush x:Key="MenuBarForegroundBrush" Color="#F8FFFFFF" />
+    <SolidColorBrush x:Key="MenuBarHoverBrush" Color="#33FFFFFF" />
+    <SolidColorBrush x:Key="MenuBarActiveBrush" Color="#4DFFFFFF" />
+    <SolidColorBrush x:Key="MenuBarInverseDotBrush" Color="#FF1C1C1E" />
 
     <Style x:Key="MenuBarButtonStyle" TargetType="Button">
         <Setter Property="Background" Value="Transparent" />
-        <Setter Property="Foreground" Value="#F5FFFFFF" />
+        <Setter Property="Foreground" Value="{DynamicResource MenuBarForegroundBrush}" />
         <Setter Property="BorderThickness" Value="0" />
         <Setter Property="Padding" Value="9,0,9,0" />
         <Setter Property="Height" Value="22" />
         <Setter Property="VerticalAlignment" Value="Center" />
         <Setter Property="FontFamily" Value="{StaticResource MacUiFont}" />
         <Setter Property="FontSize" Value="13" />
+        <Setter Property="FontWeight" Value="Medium" />
+        <Setter Property="TextOptions.TextFormattingMode" Value="Display" />
+        <Setter Property="TextOptions.TextRenderingMode" Value="ClearType" />
+        <Setter Property="SnapsToDevicePixels" Value="True" />
         <Setter Property="Cursor" Value="Arrow" />
         <Setter Property="Focusable" Value="False" />
         <Setter Property="Template">
@@ -28,18 +30,17 @@
                             CornerRadius="5"
                             Padding="{TemplateBinding Padding}">
                         <ContentPresenter HorizontalAlignment="Center"
-                                          VerticalAlignment="Center"
-                                          Effect="{StaticResource MenuBarTextShadow}" />
+                                          VerticalAlignment="Center" />
                     </Border>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
-                            <Setter TargetName="Pill" Property="Background" Value="#33FFFFFF" />
+                            <Setter TargetName="Pill" Property="Background" Value="{DynamicResource MenuBarHoverBrush}" />
                         </Trigger>
                         <Trigger Property="IsPressed" Value="True">
-                            <Setter TargetName="Pill" Property="Background" Value="#4DFFFFFF" />
+                            <Setter TargetName="Pill" Property="Background" Value="{DynamicResource MenuBarActiveBrush}" />
                         </Trigger>
                         <Trigger Property="Tag" Value="Active">
-                            <Setter TargetName="Pill" Property="Background" Value="#48FFFFFF" />
+                            <Setter TargetName="Pill" Property="Background" Value="{DynamicResource MenuBarActiveBrush}" />
                         </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>

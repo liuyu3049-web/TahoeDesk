@@ -13,16 +13,34 @@ public partial class CalendarPopup : Popup
 {
     private DateTime _displayMonth = new(DateTime.Now.Year, DateTime.Now.Month, 1);
     private readonly MenuCommandDispatcher _dispatcher = new();
+    private readonly OutsideClickDismissHook _dismissHook;
 
     public CalendarPopup()
     {
         InitializeComponent();
+        _dismissHook = new OutsideClickDismissHook(
+            CollectOpenHwnds,
+            () => Dispatcher.BeginInvoke(() => IsOpen = false));
+
         Opened += (_, _) =>
         {
             WindowInteropHelperEx.ExcludeVisualFromCapture(Child);
             _displayMonth = new DateTime(DateTime.Now.Year, DateTime.Now.Month, 1);
             RenderMonth();
+            _dismissHook.Start();
         };
+        Closed += (_, _) => _dismissHook.Stop();
+    }
+
+    public nint OwnerAnchorHwnd { get; set; }
+
+    private System.Collections.Generic.IEnumerable<nint> CollectOpenHwnds()
+    {
+        if (OwnerAnchorHwnd != 0) yield return OwnerAnchorHwnd;
+        if (Child is not null && PresentationSource.FromVisual(Child) is System.Windows.Interop.HwndSource src && src.Handle != 0)
+        {
+            yield return src.Handle;
+        }
     }
 
     public void ConfigureVisuals(DxgiBackdropSampler? sampler, GlassOpacityPreset preset, bool isDarkMode)

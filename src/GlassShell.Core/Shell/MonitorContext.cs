@@ -68,4 +68,5 @@ public readonly record struct ForegroundWindowInfo(
     string ProcessName,
     ScreenRect Bounds,
     bool IsMinimized,
-    bool IsCloaked);
+    bool IsCloaked,
+    string WindowTitle = "");

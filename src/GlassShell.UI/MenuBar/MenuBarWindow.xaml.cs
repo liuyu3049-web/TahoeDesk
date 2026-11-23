@@ -53,6 +53,7 @@ public partial class MenuBarWindow : Window
         PositionToMonitor(monitor);
 
         SourceInitialized += OnSourceInitialized;
+        Microsoft.Win32.SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;
 
         _statusTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _statusTimer.Tick += (_, _) => RefreshSystemStatus();
@@ -75,6 +76,51 @@ public partial class MenuBarWindow : Window
         BarGlassBackdrop.Visibility = settings.ShowMenuBarBackground ? Visibility.Visible : Visibility.Collapsed;
         _menuPopup.ConfigureVisuals(_sampler, settings.OpacityPreset, isDarkMode);
         _calendarPopup.ConfigureVisuals(_sampler, settings.OpacityPreset, isDarkMode);
+        UpdateTopBarInk(settings.ShowMenuBarBackground, isDarkMode);
+    }
+
+    public void DismissPopups()
+    {
+        Dispatcher.InvokeAsync(() =>
+        {
+            _menuPopup.IsOpen = false;
+            _calendarPopup.IsOpen = false;
+        });
+    }
+
+    private void UpdateTopBarInk(bool showGlassBackground, bool isDarkMode)
+    {
+        bool useDarkInk = showGlassBackground
+            ? !isDarkMode
+            : WallpaperLuminanceSampler.ShouldUseDarkInkForTopBar();
+
+        Resources["MenuBarForegroundBrush"] = new System.Windows.Media.SolidColorBrush(
+            useDarkInk
+                ? System.Windows.Media.Color.FromArgb(0xF0, 0x10, 0x11, 0x16)
+                : System.Windows.Media.Color.FromArgb(0xF8, 0xFF, 0xFF, 0xFF));
+
+        Resources["MenuBarHoverBrush"] = new System.Windows.Media.SolidColorBrush(
+            useDarkInk
+                ? System.Windows.Media.Color.FromArgb(0x1E, 0x00, 0x00, 0x00)
+                : System.Windows.Media.Color.FromArgb(0x33, 0xFF, 0xFF, 0xFF));
+
+        Resources["MenuBarActiveBrush"] = new System.Windows.Media.SolidColorBrush(
+            useDarkInk
+                ? System.Windows.Media.Color.FromArgb(0x32, 0x00, 0x00, 0x00)
+                : System.Windows.Media.Color.FromArgb(0x4D, 0xFF, 0xFF, 0xFF));
+
+        Resources["MenuBarInverseDotBrush"] = new System.Windows.Media.SolidColorBrush(
+            useDarkInk
+                ? System.Windows.Media.Color.FromRgb(0xF5, 0xF5, 0xF7)
+                : System.Windows.Media.Color.FromRgb(0x1C, 0x1C, 0x1E));
+    }
+
+    private void OnUserPreferenceChanged(object? sender, Microsoft.Win32.UserPreferenceChangedEventArgs e)
+    {
+        if (e.Category is Microsoft.Win32.UserPreferenceCategory.Desktop or Microsoft.Win32.UserPreferenceCategory.General)
+        {
+            Dispatcher.InvokeAsync(() => UpdateTopBarInk(_vm.ShowMenuBarBackground, _vm.IsDarkMode));
+        }
     }
 
     public void UpdateMenuSnapshot(MenuBarSnapshot snapshot)
@@ -95,6 +141,8 @@ public partial class MenuBarWindow : Window
     {
         var hwnd = Hwnd;
         WindowInteropHelperEx.ApplyShellOverlayStyles(hwnd);
+        _menuPopup.OwnerAnchorHwnd = hwnd;
+        _calendarPopup.OwnerAnchorHwnd = hwnd;
 
         _taskbarCreatedMsg = RegisterWindowMessageW("TaskbarCreated");
         HwndSource.FromHwnd(hwnd)?.AddHook(WndProc);
@@ -123,6 +171,15 @@ public partial class MenuBarWindow : Window
     }
 
     private void OnWinLogoClick(object sender, RoutedEventArgs e) => ToggleMenu(WinLogoButton, BuildWinSystemMenu());
+
+    private void OnBarBackgroundClick(object sender, MouseButtonEventArgs e)
+    {
+        if (e.OriginalSource == RootGrid)
+        {
+            _menuPopup.IsOpen = false;
+            _calendarPopup.IsOpen = false;
+        }
+    }
 
     private void OnWinLogoHover(object sender, MouseEventArgs e)
     {
@@ -272,6 +329,7 @@ public partial class MenuBarWindow : Window
 
     protected override void OnClosed(EventArgs e)
     {
+        Microsoft.Win32.SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged;
         _statusTimer.Stop();
         BarGlassBackdrop.Dispose();
         base.OnClosed(e);

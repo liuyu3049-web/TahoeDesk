@@ -13,6 +13,7 @@ public sealed class WindowTracker : IWindowTracker
     private const uint WINEVENT_OUTOFCONTEXT = 0x0000;
     private const uint WINEVENT_SKIPOWNPROCESS = 0x0002;
     private const uint EVENT_SYSTEM_FOREGROUND = 0x0003;
+    private const uint EVENT_SYSTEM_MOVESIZEEND = 0x000B;
     private const uint EVENT_SYSTEM_MINIMIZESTART = 0x0016;
     private const uint EVENT_SYSTEM_MINIMIZEEND = 0x0017;
     private const uint EVENT_OBJECT_CREATE = 0x8000;
@@ -45,6 +46,7 @@ public sealed class WindowTracker : IWindowTracker
         _hookDelegate = OnWinEvent;
 
         RegisterHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND);
+        RegisterHook(EVENT_SYSTEM_MOVESIZEEND, EVENT_SYSTEM_MOVESIZEEND);
         RegisterHook(EVENT_SYSTEM_MINIMIZESTART, EVENT_SYSTEM_MINIMIZEEND);
         RegisterHook(EVENT_OBJECT_CREATE, EVENT_OBJECT_HIDE);
         RegisterHook(EVENT_OBJECT_NAMECHANGE, EVENT_OBJECT_NAMECHANGE);
@@ -87,13 +89,14 @@ public sealed class WindowTracker : IWindowTracker
         }
 
         string className = GetClassName(hwnd);
+        string title = GetWindowTitle(hwnd);
         GetWindowThreadProcessId(hwnd, out uint pid);
         string exePath = QueryProcessPath(pid);
         string procName = string.IsNullOrEmpty(exePath) ? string.Empty : Path.GetFileNameWithoutExtension(exePath);
         GetWindowRect(hwnd, out RECT rc);
         bool minimized = IsIconic(hwnd);
         bool cloaked = IsCloaked(hwnd);
-        return new ForegroundWindowInfo(hwnd, pid, className, procName, new(rc.Left, rc.Top, rc.Right, rc.Bottom), minimized, cloaked);
+        return new ForegroundWindowInfo(hwnd, pid, className, procName, new(rc.Left, rc.Top, rc.Right, rc.Bottom), minimized, cloaked, title);
     }
 
     public static bool ActivateWindow(nint hwnd)
@@ -126,7 +129,7 @@ public sealed class WindowTracker : IWindowTracker
             return;
         }
 
-        if (eventType == EVENT_SYSTEM_FOREGROUND)
+        if (eventType is EVENT_SYSTEM_FOREGROUND or EVENT_SYSTEM_MOVESIZEEND or EVENT_SYSTEM_MINIMIZEEND)
         {
             var fg = GetForegroundWindowInfo();
             ForegroundChanged?.Invoke(fg);

@@ -10,12 +10,16 @@
         ResizeMode="NoResize"
         ShowInTaskbar="False"
         ShowActivated="False"
+        TextOptions.TextFormattingMode="Display"
+        TextOptions.TextRenderingMode="ClearType"
+        UseLayoutRounding="True"
+        SnapsToDevicePixels="True"
         Topmost="True">
     <Window.Resources>
         <ResourceDictionary Source="/Themes/LiquidGlassStyles.xaml" />
     </Window.Resources>
 
-    <Grid>
+    <Grid x:Name="RootGrid" Background="#01000000" MouseLeftButtonDown="OnBarBackgroundClick">
         <!-- Optional Tahoe translucent background (default off = fully transparent) -->
         <glass:LiquidGlassSurface x:Name="BarGlassBackdrop"
                                   CornerRadius="0"
@@ -31,7 +35,7 @@
                         Click="OnWinLogoClick"
                         MouseEnter="OnWinLogoHover">
                     <Path Data="M0,0 H6 V6 H0 Z M7.5,0 H13.5 V6 H7.5 Z M0,7.5 H6 V13.5 H0 Z M7.5,7.5 H13.5 V13.5 H7.5 Z"
-                          Fill="#F5FFFFFF"
+                          Fill="{DynamicResource MenuBarForegroundBrush}"
                           Width="13"
                           Height="13"
                           Stretch="Uniform" />
@@ -39,7 +43,7 @@
 
                 <Button x:Name="ActiveAppButton"
                         Style="{StaticResource MenuBarButtonStyle}"
-                        FontWeight="Bold"
+                        FontWeight="SemiBold"
                         Content="{Binding ActiveAppName}"
                         Click="OnActiveAppClick"
                         MouseEnter="OnActiveAppHover" />
@@ -76,7 +80,7 @@
                         Padding="6,0"
                         ToolTip="切换输入法"
                         Click="OnImeClick">
-                    <Border BorderBrush="#CCFFFFFF" BorderThickness="1" CornerRadius="3" Padding="3,0">
+                    <Border BorderBrush="{DynamicResource MenuBarForegroundBrush}" BorderThickness="1" CornerRadius="3" Padding="3,0">
                         <TextBlock Text="{Binding InputMethodLabel}" FontSize="10" FontWeight="SemiBold" />
                     </Border>
                 </Button>
@@ -87,16 +91,16 @@
                         Visibility="Collapsed">
                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                         <TextBlock x:Name="BatteryPercentText" FontSize="11" Margin="0,0,4,0" VerticalAlignment="Center" />
-                        <Border Width="20" Height="10" BorderBrush="#DDFFFFFF" BorderThickness="1" CornerRadius="2.5" Padding="1">
-                            <Border x:Name="BatteryFillBar" Background="#F0FFFFFF" HorizontalAlignment="Left" CornerRadius="1" Width="14" />
+                        <Border Width="20" Height="10" BorderBrush="{DynamicResource MenuBarForegroundBrush}" BorderThickness="1" CornerRadius="2.5" Padding="1">
+                            <Border x:Name="BatteryFillBar" Background="{DynamicResource MenuBarForegroundBrush}" HorizontalAlignment="Left" CornerRadius="1" Width="14" />
                         </Border>
                     </StackPanel>
                 </Button>
 
                 <Button Style="{StaticResource MenuBarButtonStyle}" Padding="6,0" ToolTip="网络状态">
                     <Path Data="M1,6 A11,11 0 0 1 15,6 M3.5,8.5 A7.5,7.5 0 0 1 12.5,8.5 M6,11 A4,4 0 0 1 10,11 M8,13.5 A0.8,0.8 0 1 1 8,13.49"
-                          Stroke="#F5FFFFFF"
-                          StrokeThickness="1.4"
+                          Stroke="{DynamicResource MenuBarForegroundBrush}"
+                          StrokeThickness="1.5"
                           StrokeStartLineCap="Round"
                           StrokeEndLineCap="Round"
                           Width="15"
@@ -109,7 +113,7 @@
                         ToolTip="聚焦搜索 (Alt+Space)"
                         Click="OnSpotlightClick">
                     <Path Data="M6.5,1 A5.5,5.5 0 1 0 6.5,12 A5.5,5.5 0 1 0 6.5,1 M10.5,10.5 L14.5,14.5"
-                          Stroke="#F5FFFFFF"
+                          Stroke="{DynamicResource MenuBarForegroundBrush}"
                           StrokeThickness="1.5"
                           StrokeStartLineCap="Round"
                           StrokeEndLineCap="Round"
@@ -122,13 +126,12 @@
                         Padding="6,0"
                         ToolTip="控制中心"
                         Click="OnControlCenterClick">
-                    <!-- macOS Control Center double toggle icon -->
                     <Canvas Width="16" Height="13">
-                        <Border Canvas.Top="0" Width="16" Height="5.5" CornerRadius="2.75" BorderBrush="#F5FFFFFF" BorderThickness="1.2">
-                            <Ellipse Width="3.5" Height="3.5" Fill="#F5FFFFFF" HorizontalAlignment="Left" Margin="0.5,0,0,0" />
+                        <Border Canvas.Top="0" Width="16" Height="5.5" CornerRadius="2.75" BorderBrush="{DynamicResource MenuBarForegroundBrush}" BorderThickness="1.2">
+                            <Ellipse Width="3.5" Height="3.5" Fill="{DynamicResource MenuBarForegroundBrush}" HorizontalAlignment="Left" Margin="0.5,0,0,0" />
                         </Border>
-                        <Border Canvas.Top="7.5" Width="16" Height="5.5" CornerRadius="2.75" Background="#E6FFFFFF">
-                            <Ellipse Width="3.5" Height="3.5" Fill="#FF1C1C1E" HorizontalAlignment="Right" Margin="0,0,1,0" />
+                        <Border Canvas.Top="7.5" Width="16" Height="5.5" CornerRadius="2.75" Background="{DynamicResource MenuBarForegroundBrush}">
+                            <Ellipse Width="3.5" Height="3.5" Fill="{DynamicResource MenuBarInverseDotBrush}" HorizontalAlignment="Right" Margin="0,0,1,0" />
                         </Border>
                     </Canvas>
                 </Button>

@@ -35,6 +35,9 @@ public partial class App : Application
     private QuickSettingsWindow? _settingsWindow;
     private MonitorContext? _primaryMonitor;
     private DispatcherTimer? _periodicRefreshTimer;
+    private DispatcherTimer? _foregroundReconcileTimer;
+    private nint _lastForegroundHwnd;
+    private string _lastForegroundTitle = string.Empty;
     private readonly LinkedList<string> _recentApps = new();
     private bool _cleanedUp;
 
@@ -135,6 +138,24 @@ public partial class App : Application
         _periodicRefreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
         _periodicRefreshTimer.Tick += (_, _) => RefreshDockItems();
         _periodicRefreshTimer.Start();
+
+        // Lightweight 250ms foreground reconciliation catches Windows 11 Explorer XAML tabs
+        // and UWP ApplicationFrameHost switches where EVENT_SYSTEM_FOREGROUND may be missed.
+        _foregroundReconcileTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
+        _foregroundReconcileTimer.Tick += (_, _) => ReconcileForegroundWindow();
+        _foregroundReconcileTimer.Start();
+    }
+
+    private void ReconcileForegroundWindow()
+    {
+        if (_windowTracker is null) return;
+        var fg = _windowTracker.GetForegroundWindowInfo();
+        if (fg.Hwnd == 0 || fg.ProcessId == (uint)Environment.ProcessId) return;
+
+        if (fg.Hwnd != _lastForegroundHwnd || !string.Equals(fg.WindowTitle, _lastForegroundTitle, StringComparison.Ordinal))
+        {
+            OnForegroundChanged(fg);
+        }
     }
 
     private void OnForegroundChanged(ForegroundWindowInfo fg)
@@ -146,6 +167,14 @@ public partial class App : Application
         {
             return;
         }
+
+        if (fg.Hwnd != _lastForegroundHwnd)
+        {
+            _menuBarWindow?.DismissPopups();
+            _dockWindow?.DismissPopups();
+        }
+        _lastForegroundHwnd = fg.Hwnd;
+        _lastForegroundTitle = fg.WindowTitle;
 
         bool isFs = FullscreenDetector.IsFullscreen(fg, _primaryMonitor, _taskbarNative.IsD3DFullscreenActive());
         _taskbarController.UpdateFullscreenState(isFs);
@@ -159,7 +188,7 @@ public partial class App : Application
 
         if (_menuCoordinator is not null && fg.Hwnd != 0)
         {
-            string displayName = string.IsNullOrWhiteSpace(fg.ProcessName) ? "桌面" : fg.ProcessName;
+            string displayName = FriendlyAppNameResolver.Resolve(fg.ProcessName, fg.ClassName, fg.WindowTitle);
             _ = _menuCoordinator.OnForegroundChangedAsync(fg.Hwnd, fg.ProcessId, fg.ProcessName, displayName);
         }
     }
@@ -278,6 +307,7 @@ public partial class App : Application
         _cleanedUp = true;
 
         try { _periodicRefreshTimer?.Stop(); } catch { }
+        try { _foregroundReconcileTimer?.Stop(); } catch { }
         try { _windowTracker?.Dispose(); } catch { }
         try { _menuCoordinator?.Dispose(); } catch { }
         try { _taskbarController?.Release(); } catch { }

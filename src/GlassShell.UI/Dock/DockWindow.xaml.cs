@@ -106,6 +106,7 @@ public partial class DockWindow : Window
 
     public void SetYieldForTray(bool yield) => _yieldForTray = yield;
     public void SetBottomOverlap(bool overlap) => _hasBottomOverlap = overlap;
+    public void DismissPopups() => Dispatcher.InvokeAsync(() => _contextMenu.IsOpen = false);
 
     public void PositionToMonitor(MonitorContext monitor)
     {
@@ -285,11 +286,33 @@ public partial class DockWindow : Window
                     raw.Width, raw.Height, 96, 96,
                     PixelFormats.Bgra32, null, raw.BgraPixels, raw.Width * 4);
                 bmp.Freeze();
+
+                bool needsSquirclePlate = IconShapeAnalyzer.HasTransparentCorners(raw);
+                if (needsSquirclePlate)
+                {
+                    // Harmonize Win32 silhouette logos inside a unified macOS Tahoe Squircle tile
+                    var plateBg = new LinearGradientBrush(
+                        Color.FromRgb(0xF8, 0xFA, 0xFE),
+                        Color.FromRgb(0xDC, 0xE3, 0xF0),
+                        90);
+                    return new Border
+                    {
+                        Background = plateBg,
+                        BorderBrush = new SolidColorBrush(Color.FromArgb(0x66, 0xFF, 0xFF, 0xFF)),
+                        BorderThickness = new Thickness(0.75),
+                        Child = new Image
+                        {
+                            Source = bmp,
+                            Stretch = Stretch.Uniform,
+                            Margin = new Thickness(6.5)
+                        }
+                    };
+                }
+
                 return new Image
                 {
                     Source = bmp,
-                    Stretch = Stretch.Uniform,
-                    Margin = new Thickness(2)
+                    Stretch = Stretch.UniformToFill
                 };
             }
         }

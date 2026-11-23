@@ -30,12 +30,51 @@ public partial class LiquidGlassMenuPopup : Popup
 
     private DxgiBackdropSampler? _sampler;
     private LiquidGlassMenuPopup? _openSubmenu;
+    private readonly OutsideClickDismissHook? _dismissHook;
+    private readonly bool _isRoot;
 
-    public LiquidGlassMenuPopup()
+    public LiquidGlassMenuPopup() : this(isRoot: true) { }
+
+    private LiquidGlassMenuPopup(bool isRoot)
     {
+        _isRoot = isRoot;
         InitializeComponent();
-        Opened += (_, _) => WindowInteropHelperEx.ExcludeVisualFromCapture(Child);
-        Closed += (_, _) => CloseSubmenu();
+
+        if (_isRoot)
+        {
+            _dismissHook = new OutsideClickDismissHook(
+                CollectOpenHwnds,
+                () => Dispatcher.BeginInvoke(() => IsOpen = false));
+        }
+
+        Opened += (_, _) =>
+        {
+            WindowInteropHelperEx.ExcludeVisualFromCapture(Child);
+            _dismissHook?.Start();
+        };
+        Closed += (_, _) =>
+        {
+            _dismissHook?.Stop();
+            CloseSubmenu();
+        };
+    }
+
+    public nint OwnerAnchorHwnd { get; set; }
+
+    internal IEnumerable<nint> CollectOpenHwnds()
+    {
+        if (OwnerAnchorHwnd != 0) yield return OwnerAnchorHwnd;
+        if (Child is not null && PresentationSource.FromVisual(Child) is System.Windows.Interop.HwndSource src && src.Handle != 0)
+        {
+            yield return src.Handle;
+        }
+        if (_openSubmenu is { IsOpen: true })
+        {
+            foreach (var h in _openSubmenu.CollectOpenHwnds())
+            {
+                yield return h;
+            }
+        }
     }
 
     public void ConfigureVisuals(DxgiBackdropSampler? sampler, GlassOpacityPreset preset, bool isDarkMode)
@@ -214,7 +253,7 @@ public partial class LiquidGlassMenuPopup : Popup
     private void OpenSubmenu(UIElement anchor, IReadOnlyList<PopupMenuEntry> children, bool isDarkMode)
     {
         CloseSubmenu();
-        _openSubmenu = new LiquidGlassMenuPopup
+        _openSubmenu = new LiquidGlassMenuPopup(isRoot: false)
         {
             Placement = PlacementMode.Right,
             PlacementTarget = anchor,

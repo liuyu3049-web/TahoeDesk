@@ -7,6 +7,7 @@
     <Nullable>enable</Nullable>
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <LangVersion>12</LangVersion>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
   </PropertyGroup>
   <ItemGroup>
     <ProjectReference Include="..\GlassShell.Core\GlassShell.Core.csproj" />
