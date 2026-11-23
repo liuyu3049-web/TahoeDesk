@@ -19,7 +19,17 @@ public sealed class Win32TaskbarNative : ITaskbarNative
     public bool SetWindowVisible(nint hwnd, bool visible)
     {
         if (hwnd == 0) return false;
-        ShowWindow(hwnd, visible ? SW_SHOW : SW_HIDE);
+        int cmd = visible ? SW_SHOW : SW_HIDE;
+        ShowWindow(hwnd, cmd);
+
+        // Also hide/restore all secondary monitor taskbars (built-in / multi-display)
+        nint sec = FindWindowExW(0, 0, "Shell_SecondaryTrayWnd", null);
+        while (sec != 0)
+        {
+            ShowWindow(sec, cmd);
+            sec = FindWindowExW(0, sec, "Shell_SecondaryTrayWnd", null);
+        }
+
         return true;
     }
 
@@ -85,6 +95,13 @@ public sealed class Win32TaskbarNative : ITaskbarNative
         {
             ShowWindow(hwnd, SW_SHOW);
         }
+
+        nint sec = FindWindowExW(0, 0, "Shell_SecondaryTrayWnd", null);
+        while (sec != 0)
+        {
+            ShowWindow(sec, SW_SHOW);
+            sec = FindWindowExW(0, sec, "Shell_SecondaryTrayWnd", null);
+        }
     }
 
     [StructLayout(LayoutKind.Sequential)]
@@ -103,6 +120,9 @@ public sealed class Win32TaskbarNative : ITaskbarNative
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern nint FindWindowW(string lpClassName, string? lpWindowName);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern nint FindWindowExW(nint hwndParent, nint hwndChildAfter, string lpszClass, string? lpszWindow);
 
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]

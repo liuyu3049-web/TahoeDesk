@@ -20,6 +20,8 @@ namespace GlassShell.UI;
 
 public partial class App : Application
 {
+    private sealed record DisplayShellPair(MonitorContext Monitor, MenuBarWindow MenuBar, DockWindow Dock);
+
     private Mutex? _singleInstanceMutex;
     private EventWaitHandle? _cleanExitEvent;
     private JsonSettingsStore? _settingsStore;
@@ -30,10 +32,8 @@ public partial class App : Application
     private ForegroundMenuCoordinator? _menuCoordinator;
     private DxgiBackdropSampler? _backdropSampler;
     private RecycleBinService? _recycleBinService;
-    private MenuBarWindow? _menuBarWindow;
-    private DockWindow? _dockWindow;
+    private readonly List<DisplayShellPair> _shells = [];
     private QuickSettingsWindow? _settingsWindow;
-    private MonitorContext? _primaryMonitor;
     private DispatcherTimer? _periodicRefreshTimer;
     private DispatcherTimer? _foregroundReconcileTimer;
     private nint _lastForegroundHwnd;
@@ -78,7 +78,7 @@ public partial class App : Application
             _settingsStore.Save(_settings);
         }
 
-        _primaryMonitor = MonitorContext.GetPrimaryMonitor();
+        var monitors = MonitorContext.GetAllMonitors();
         bool isDark = ResolveIsDarkMode(_settings);
 
         _taskbarNative = new Win32TaskbarNative();
@@ -97,39 +97,64 @@ public partial class App : Application
             JsonProfileMenuProvider.CreateBuiltIn(),
             (uint)Environment.ProcessId);
 
-        _menuBarWindow = new MenuBarWindow(_primaryMonitor, _taskbarController, _windowTracker, _backdropSampler, _settings, isDark);
-        _dockWindow = new DockWindow(_primaryMonitor, _backdropSampler, _settings, isDark);
-
-        _menuBarWindow.SettingsRequested += OpenQuickSettings;
-        _menuBarWindow.RestoreNativeTaskbarRequested += () =>
+        foreach (var monitor in monitors)
         {
-            CleanupSafe();
-            Shutdown(0);
+            var menuBar = new MenuBarWindow(monitor, _taskbarController, _windowTracker, _backdropSampler, _settings, isDark);
+            var dock = new DockWindow(monitor, _backdropSampler, _settings, isDark);
+
+            menuBar.SettingsRequested += OpenQuickSettings;
+            menuBar.RestoreNativeTaskbarRequested += () =>
+            {
+                CleanupSafe();
+                Shutdown(0);
+            };
+            menuBar.SpotlightRequested += () => ShowPhase2Notice("聚焦搜索 (Spotlight) 将在阶段二启用");
+            menuBar.ControlCenterRequested += () => ShowPhase2Notice("控制中心 (Control Center) 将在阶段二启用");
+
+            dock.LaunchpadRequested += () => ShowPhase2Notice("启动台 (Launchpad) 将在阶段二启用");
+            dock.SettingsUpdated += ApplyUpdatedSettings;
+
+            menuBar.Show();
+            dock.Show();
+
+            _shells.Add(new DisplayShellPair(monitor, menuBar, dock));
+        }
+
+        _menuCoordinator.SnapshotChanged += snap =>
+        {
+            foreach (var s in _shells) s.MenuBar.UpdateMenuSnapshot(snap);
         };
-        _menuBarWindow.SpotlightRequested += () => ShowPhase2Notice("聚焦搜索 (Spotlight) 将在阶段二启用");
-        _menuBarWindow.ControlCenterRequested += () => ShowPhase2Notice("控制中心 (Control Center) 将在阶段二启用");
-
-        _dockWindow.LaunchpadRequested += () => ShowPhase2Notice("启动台 (Launchpad) 将在阶段二启用");
-        _dockWindow.SettingsUpdated += ApplyUpdatedSettings;
-
-        _menuCoordinator.SnapshotChanged += snap => _menuBarWindow.UpdateMenuSnapshot(snap);
 
         _taskbarController.BarsVisibilityChanged += visible => Dispatcher.InvokeAsync(() =>
         {
             var vis = visible ? Visibility.Visible : Visibility.Collapsed;
-            if (_menuBarWindow is not null) _menuBarWindow.Visibility = vis;
-            if (_dockWindow is not null) _dockWindow.Visibility = vis;
+            foreach (var s in _shells)
+            {
+                s.MenuBar.Visibility = vis;
+                s.Dock.Visibility = vis;
+            }
         });
-        _taskbarController.DockYieldForTrayChanged += yield => Dispatcher.InvokeAsync(() => _dockWindow?.SetYieldForTray(yield));
+        _taskbarController.DockYieldForTrayChanged += yield => Dispatcher.InvokeAsync(() =>
+        {
+            foreach (var s in _shells) s.Dock.SetYieldForTray(yield);
+        });
 
         _windowTracker.TaskbarShownDetected += () => _taskbarController.HandleTaskbarShownEvent();
         _windowTracker.ForegroundChanged += OnForegroundChanged;
         _windowTracker.WindowsChanged += () => Dispatcher.InvokeAsync(RefreshDockItems);
 
-        _menuBarWindow.Show();
-        _dockWindow.Show();
+        // Acquire taskbar suppression + primary top AppBar; also register secondary monitor top AppBars cleanly
+        var primary = _shells.FirstOrDefault(s => s.Monitor.IsPrimary) ?? _shells[0];
+        _taskbarController.Acquire(primary.MenuBar.Hwnd, primary.Monitor, topBarDip: 28);
+        foreach (var s in _shells)
+        {
+            if (s != primary)
+            {
+                int secHeightPx = (int)Math.Round(28 * s.Monitor.DpiScale);
+                _taskbarNative.RegisterTopAppBar(s.MenuBar.Hwnd, secHeightPx, s.Monitor.Bounds);
+            }
+        }
 
-        _taskbarController.Acquire(_menuBarWindow.Hwnd, _primaryMonitor, topBarDip: 28);
         _windowTracker.Start();
 
         RefreshDockItems();
@@ -139,8 +164,6 @@ public partial class App : Application
         _periodicRefreshTimer.Tick += (_, _) => RefreshDockItems();
         _periodicRefreshTimer.Start();
 
-        // Lightweight 250ms foreground reconciliation catches Windows 11 Explorer XAML tabs
-        // and UWP ApplicationFrameHost switches where EVENT_SYSTEM_FOREGROUND may be missed.
         _foregroundReconcileTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
         _foregroundReconcileTimer.Tick += (_, _) => ReconcileForegroundWindow();
         _foregroundReconcileTimer.Start();
@@ -160,7 +183,7 @@ public partial class App : Application
 
     private void OnForegroundChanged(ForegroundWindowInfo fg)
     {
-        if (_primaryMonitor is null || _taskbarController is null || _taskbarNative is null) return;
+        if (_shells.Count == 0 || _taskbarController is null || _taskbarNative is null) return;
 
         uint selfPid = (uint)Environment.ProcessId;
         if (fg.ProcessId == selfPid)
@@ -170,21 +193,33 @@ public partial class App : Application
 
         if (fg.Hwnd != _lastForegroundHwnd)
         {
-            _menuBarWindow?.DismissPopups();
-            _dockWindow?.DismissPopups();
+            foreach (var s in _shells)
+            {
+                s.MenuBar.DismissPopups();
+                s.Dock.DismissPopups();
+            }
         }
         _lastForegroundHwnd = fg.Hwnd;
         _lastForegroundTitle = fg.WindowTitle;
 
-        bool isFs = FullscreenDetector.IsFullscreen(fg, _primaryMonitor, _taskbarNative.IsD3DFullscreenActive());
-        _taskbarController.UpdateFullscreenState(isFs);
-
-        if (_dockWindow is not null && fg.Hwnd != 0 && !fg.IsMinimized && !fg.IsCloaked)
+        // Evaluate fullscreen & bottom overlap per monitor
+        bool anyFullscreen = false;
+        bool d3dFs = _taskbarNative.IsD3DFullscreenActive();
+        foreach (var s in _shells)
         {
-            bool overlapsBottom = fg.ClassName is not ("Progman" or "WorkerW" or "Shell_TrayWnd")
-                && fg.Bounds.Bottom >= _primaryMonitor.Bounds.Bottom - (int)(84 * _primaryMonitor.DpiScale);
-            Dispatcher.InvokeAsync(() => _dockWindow.SetBottomOverlap(overlapsBottom));
+            bool isFs = FullscreenDetector.IsFullscreen(fg, s.Monitor, d3dFs);
+            if (isFs) anyFullscreen = true;
+
+            if (fg.Hwnd != 0 && !fg.IsMinimized && !fg.IsCloaked)
+            {
+                bool onThisMonitor = fg.Bounds.Right > s.Monitor.Bounds.Left && fg.Bounds.Left < s.Monitor.Bounds.Right;
+                bool overlapsBottom = onThisMonitor
+                    && fg.ClassName is not ("Progman" or "WorkerW" or "Shell_TrayWnd" or "Shell_SecondaryTrayWnd")
+                    && fg.Bounds.Bottom >= s.Monitor.Bounds.Bottom - (int)(84 * s.Monitor.DpiScale);
+                Dispatcher.InvokeAsync(() => s.Dock.SetBottomOverlap(overlapsBottom));
+            }
         }
+        _taskbarController.UpdateFullscreenState(anyFullscreen);
 
         if (_menuCoordinator is not null && fg.Hwnd != 0)
         {
@@ -195,7 +230,7 @@ public partial class App : Application
 
     private void RefreshDockItems()
     {
-        if (_windowTracker is null || _recycleBinService is null || _dockWindow is null) return;
+        if (_windowTracker is null || _recycleBinService is null || _shells.Count == 0) return;
 
         var windows = _windowTracker.GetTopLevelWindows();
         foreach (var w in windows)
@@ -210,7 +245,10 @@ public partial class App : Application
 
         var rb = _recycleBinService.Query();
         var items = DockModelCoordinator.BuildDockItems(_settings, windows, _recentApps.ToList(), rb);
-        _dockWindow.UpdateItems(items);
+        foreach (var s in _shells)
+        {
+            s.Dock.UpdateItems(items);
+        }
     }
 
     private void ApplyUpdatedSettings(GlassSettings updated)
@@ -218,8 +256,11 @@ public partial class App : Application
         _settings = updated;
         _settingsStore?.Save(updated);
         bool isDark = ResolveIsDarkMode(updated);
-        _menuBarWindow?.ApplySettings(updated, isDark);
-        _dockWindow?.ApplySettings(updated, isDark);
+        foreach (var s in _shells)
+        {
+            s.MenuBar.ApplySettings(updated, isDark);
+            s.Dock.ApplySettings(updated, isDark);
+        }
         RefreshDockItems();
     }
 
@@ -310,6 +351,20 @@ public partial class App : Application
         try { _foregroundReconcileTimer?.Stop(); } catch { }
         try { _windowTracker?.Dispose(); } catch { }
         try { _menuCoordinator?.Dispose(); } catch { }
+        try
+        {
+            if (_taskbarNative is not null)
+            {
+                foreach (var s in _shells)
+                {
+                    if (!s.Monitor.IsPrimary)
+                    {
+                        _taskbarNative.UnregisterAppBar(s.MenuBar.Hwnd);
+                    }
+                }
+            }
+        }
+        catch { }
         try { _taskbarController?.Release(); } catch { }
         try { _backdropSampler?.Dispose(); } catch { }
         try { _cleanExitEvent?.Set(); } catch { }

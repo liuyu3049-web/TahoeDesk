@@ -10,10 +10,9 @@
         ResizeMode="NoResize"
         ShowInTaskbar="False"
         ShowActivated="False"
-        TextOptions.TextFormattingMode="Display"
-        TextOptions.TextRenderingMode="ClearType"
-        UseLayoutRounding="True"
-        SnapsToDevicePixels="True"
+        TextOptions.TextFormattingMode="Ideal"
+        TextOptions.TextRenderingMode="Grayscale"
+        UseLayoutRounding="False"
         Topmost="True">
     <Window.Resources>
         <ResourceDictionary Source="/Themes/LiquidGlassStyles.xaml" />
@@ -90,7 +89,7 @@
                         Padding="6,0"
                         Visibility="Collapsed">
                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                        <TextBlock x:Name="BatteryPercentText" FontSize="11" Margin="0,0,4,0" VerticalAlignment="Center" />
+                        <TextBlock x:Name="BatteryPercentText" FontSize="12" Margin="0,0,4,0" VerticalAlignment="Center" Typography.NumeralAlignment="Tabular" />
                         <Border Width="20" Height="10" BorderBrush="{DynamicResource MenuBarForegroundBrush}" BorderThickness="1" CornerRadius="2.5" Padding="1">
                             <Border x:Name="BatteryFillBar" Background="{DynamicResource MenuBarForegroundBrush}" HorizontalAlignment="Left" CornerRadius="1" Width="14" />
                         </Border>
@@ -139,8 +138,11 @@
                 <Button x:Name="ClockButton"
                         Style="{StaticResource MenuBarButtonStyle}"
                         Padding="8,0"
-                        Content="{Binding FormattedClock}"
-                        Click="OnClockClick" />
+                        Click="OnClockClick">
+                    <TextBlock Text="{Binding FormattedClock}"
+                               Typography.NumeralAlignment="Tabular"
+                               VerticalAlignment="Center" />
+                </Button>
             </StackPanel>
         </DockPanel>
     </Grid>

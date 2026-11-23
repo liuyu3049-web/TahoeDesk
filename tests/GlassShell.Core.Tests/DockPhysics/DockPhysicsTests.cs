@@ -33,6 +33,31 @@ public sealed class DockPhysicsTests
     }
 
     [Fact]
+    public void Magnification_CenteredWithDividers_IsStrictlySymmetricAndPinsHoveredIconCenter()
+    {
+        // 7 items with a divider after index 1 and index 4 (like real Dock)
+        int[] dividersAfter = [1, 4];
+        var rest = DockMagnificationCalculator.ComputeCentered(
+            itemCount: 7, baseSize: 52, gap: 8, dividerAfterIndices: dividersAfter, dividerWidth: 14,
+            pointerRelCenter: null, magnificationEnabled: true, maxScale: 1.6);
+
+        // Hover directly over icon #3 (middle icon)
+        double targetRestCenter = rest[3].CenterX;
+        var hovered = DockMagnificationCalculator.ComputeCentered(
+            itemCount: 7, baseSize: 52, gap: 8, dividerAfterIndices: dividersAfter, dividerWidth: 14,
+            pointerRelCenter: targetRestCenter, magnificationEnabled: true, maxScale: 1.6);
+
+        // Peak at icon #3, strictly symmetric left & right neighbors
+        Assert.Equal(52 * 1.6, hovered[3].RenderedSize, precision: 2);
+        Assert.Equal(hovered[2].RenderedSize, hovered[4].RenderedSize, precision: 2);
+        Assert.True(hovered[3].RenderedSize > hovered[2].RenderedSize);
+        Assert.True(hovered[2].RenderedSize > hovered[1].RenderedSize);
+
+        // Hovered icon's center stays pinned under the mouse pointer (zero leftward drift!)
+        Assert.InRange(hovered[3].CenterX - targetRestCenter, -1.0, 1.0);
+    }
+
+    [Fact]
     public void SpringBounce_LiftsAboveZeroAndSettlesBackToZero()
     {
         var anim = new SpringBounceAnimator();

@@ -137,30 +137,33 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
         float shadowPadPx = (float)(ShadowPadding * dpiMatrix.M11);
         var renderParams = GlassRenderParams.FromPreset(OpacityPreset, IsDarkMode, radiusPx, IsOverlayCard);
 
-        if (_renderer.RenderSurface(rectPx, renderParams, shadowPadPx, DetachBackBuffer)
+        if (_renderer.RenderSurface(rectPx, renderParams, shadowPadPx, DetachBackBuffer, out bool frameUpdated)
             && _renderer.SharedD3D9SurfacePtr != 0)
         {
-            _d3dImage.Lock();
-            try
+            nint ptr = _renderer.SharedD3D9SurfacePtr;
+            if (frameUpdated || _boundSurfacePtr != ptr || !_hasValidFrame)
             {
-                nint ptr = _renderer.SharedD3D9SurfacePtr;
-                if (_boundSurfacePtr != ptr)
+                _d3dImage.Lock();
+                try
                 {
-                    _d3dImage.SetBackBuffer(D3DResourceType.IDirect3DSurface9, ptr, enableSoftwareFallback: true);
-                    _boundSurfacePtr = ptr;
+                    if (_boundSurfacePtr != ptr)
+                    {
+                        _d3dImage.SetBackBuffer(D3DResourceType.IDirect3DSurface9, ptr, enableSoftwareFallback: true);
+                        _boundSurfacePtr = ptr;
+                    }
+                    if (_d3dImage.PixelWidth > 0 && _d3dImage.PixelHeight > 0)
+                    {
+                        _d3dImage.AddDirtyRect(new Int32Rect(0, 0, _d3dImage.PixelWidth, _d3dImage.PixelHeight));
+                        _hasValidFrame = true;
+                    }
                 }
-                if (_d3dImage.PixelWidth > 0 && _d3dImage.PixelHeight > 0)
+                finally
                 {
-                    _d3dImage.AddDirtyRect(new Int32Rect(0, 0, _d3dImage.PixelWidth, _d3dImage.PixelHeight));
-                    _hasValidFrame = true;
+                    _d3dImage.Unlock();
                 }
-            }
-            finally
-            {
-                _d3dImage.Unlock();
-            }
 
-            InvalidateVisual();
+                InvalidateVisual();
+            }
         }
         else if (_hasValidFrame)
         {

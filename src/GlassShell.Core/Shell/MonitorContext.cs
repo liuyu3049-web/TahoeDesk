@@ -32,8 +32,47 @@ public sealed record MonitorContext(nint MonitorHandle, ScreenRect Bounds, doubl
         return new MonitorContext(hMonitor, bounds, dpiScale, IsPrimary: true);
     }
 
+    public static System.Collections.Generic.IReadOnlyList<MonitorContext> GetAllMonitors()
+    {
+        var list = new System.Collections.Generic.List<MonitorContext>();
+        EnumDisplayMonitors(0, 0, (hMonitor, _, _, _) =>
+        {
+            var info = new MONITORINFO { cbSize = (uint)Marshal.SizeOf<MONITORINFO>() };
+            if (GetMonitorInfoW(hMonitor, ref info))
+            {
+                var bounds = new ScreenRect(info.rcMonitor.Left, info.rcMonitor.Top, info.rcMonitor.Right, info.rcMonitor.Bottom);
+                double dpiScale = 1.0;
+                if (GetDpiForMonitor(hMonitor, MDT_EFFECTIVE_DPI, out uint dpiX, out _) == 0 && dpiX >= 96)
+                {
+                    dpiScale = dpiX / 96.0;
+                }
+                bool isPrimary = (info.dwFlags & MONITORINFOF_PRIMARY) != 0;
+                list.Add(new MonitorContext(hMonitor, bounds, dpiScale, isPrimary));
+            }
+            return true;
+        }, 0);
+
+        if (list.Count == 0)
+        {
+            list.Add(GetPrimaryMonitor());
+        }
+        else
+        {
+            list.Sort((a, b) => b.IsPrimary.CompareTo(a.IsPrimary));
+        }
+
+        return list;
+    }
+
     private const uint MONITOR_DEFAULTTOPRIMARY = 0x00000001;
+    private const uint MONITORINFOF_PRIMARY = 0x00000001;
     private const int MDT_EFFECTIVE_DPI = 0;
+
+    private delegate bool MonitorEnumProc(nint hMonitor, nint hdcMonitor, nint lprcMonitor, nint dwData);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool EnumDisplayMonitors(nint hdc, nint lprcClip, MonitorEnumProc lpfnEnum, nint dwData);
 
     [StructLayout(LayoutKind.Sequential)]
     private struct POINT { public int X; public int Y; }

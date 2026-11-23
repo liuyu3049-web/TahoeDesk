@@ -88,12 +88,16 @@ internal static class Program
             ShowWindow(tray, SW_SHOW);
         }
 
-        nint secondary = FindWindowW("Shell_SecondaryTrayWnd", null);
-        if (secondary != 0)
+        nint secondary = FindWindowExW(0, 0, "Shell_SecondaryTrayWnd", null);
+        while (secondary != 0)
         {
             ShowWindow(secondary, SW_SHOW);
+            secondary = FindWindowExW(0, secondary, "Shell_SecondaryTrayWnd", null);
         }
     }
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern nint FindWindowExW(nint hwndParent, nint hwndChildAfter, string lpszClass, string? lpszWindow);
 
     [DllImport("kernel32.dll", SetLastError = true)]
     private static extern nint OpenProcess(uint dwDesiredAccess, [MarshalAs(UnmanagedType.Bool)] bool bInheritHandle, uint dwProcessId);

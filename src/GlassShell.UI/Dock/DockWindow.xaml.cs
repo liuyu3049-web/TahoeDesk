@@ -30,6 +30,7 @@ public partial class DockWindow : Window
     }
 
     private const double IconGapDip = 8.0;
+    private const double DividerWidthDip = 14.0;
     private const double CapsuleHorizontalPadDip = 14.0;
     private const double CapsuleShadowPadDip = 16.0;
 
@@ -375,8 +376,10 @@ public partial class DockWindow : Window
 
     private void OnIconsMouseMove(object sender, MouseEventArgs e)
     {
-        var pt = e.GetPosition(IconsCanvas);
-        _rawPointerX = pt.X;
+        // Measure pointer in FIXED unshifted RootContainer center-relative space (0.0 = Dock center)
+        // so widening IconsCanvas never shifts the pointer coordinate or pushes icons away!
+        double relCenter = e.GetPosition(RootContainer).X - RootContainer.ActualWidth * 0.5;
+        _rawPointerX = relCenter;
         _pointerActive = true;
     }
 
@@ -438,35 +441,42 @@ public partial class DockWindow : Window
         if (_slots.Count == 0) return;
 
         double baseSize = _settings.DockIconSize;
-        double? pointer = _hoverAnimator.EffectivePointerX;
+        double? pointerRelCenter = _hoverAnimator.EffectivePointerX;
         double effectiveScale = 1.0 + (_settings.DockMagnificationScale - 1.0) * _hoverAnimator.HoverAmount;
-        var layouts = DockMagnificationCalculator.Compute(
+
+        var layout = DockMagnificationCalculator.ComputeCenteredFull(
             _slots.Count,
             baseSize,
             IconGapDip,
-            pointer,
+            _dividerAfterIndices,
+            DividerWidthDip,
+            pointerRelCenter,
             _settings.DockMagnificationEnabled && _hoverAnimator.HoverAmount > 0.003,
             effectiveScale);
 
         double nowSec = _clock.Elapsed.TotalSeconds;
-        double dividerExtraWidth = _dividers.Count * 14.0;
-        double totalIconsWidth = DockMagnificationCalculator.ComputeTotalWidth(layouts, IconGapDip) + dividerExtraWidth;
+        double canvasWidth = Math.Max(64, layout.TotalWidth);
+        double halfCanvas = canvasWidth * 0.5;
 
-        IconsCanvas.Width = Math.Max(64, totalIconsWidth);
-        CapsuleGlass.Width = IconsCanvas.Width + CapsuleHorizontalPadDip * 2 + CapsuleShadowPadDip * 2;
+        IconsCanvas.Width = canvasWidth;
+        CapsuleGlass.Width = canvasWidth + CapsuleHorizontalPadDip * 2 + CapsuleShadowPadDip * 2;
 
-        double xShift = 0;
-        int divPtr = 0;
         DockSlotVisual? hoveredVisual = null;
+        double hoveredIconCenterX = 0;
+        double hoveredIconTopY = 0;
         double bestHoverDist = double.MaxValue;
+        double? activePointerCanvasX = _pointerActive && _rawPointerX.HasValue
+            ? halfCanvas + _rawPointerX.Value
+            : null;
 
         for (int i = 0; i < _slots.Count; i++)
         {
             var slot = _slots[i];
-            var l = layouts[i];
+            var l = layout.Icons[i];
             double bounceY = _bounceAnimator.SampleOffsetY(slot.Model.Id, nowSec);
 
-            double left = (l.CenterX - l.RenderedSize * 0.5) + xShift;
+            double centerCanvasX = halfCanvas + l.CenterX;
+            double left = centerCanvasX - l.RenderedSize * 0.5;
             double bottomBaseline = IconsCanvas.Height - 10;
             double top = bottomBaseline - l.RenderedSize - bounceY;
 
@@ -478,35 +488,33 @@ public partial class DockWindow : Window
             Canvas.SetLeft(slot.Container, left);
             Canvas.SetTop(slot.Container, top);
 
-            if (pointer.HasValue)
+            if (activePointerCanvasX.HasValue)
             {
-                double dist = Math.Abs((left + l.RenderedSize * 0.5) - pointer.Value);
-                if (dist < l.RenderedSize * 0.55 && dist < bestHoverDist)
+                double dist = Math.Abs(centerCanvasX - activePointerCanvasX.Value);
+                if (dist <= l.RenderedSize * 0.52 && dist < bestHoverDist)
                 {
                     bestHoverDist = dist;
                     hoveredVisual = slot;
+                    hoveredIconCenterX = centerCanvasX;
+                    hoveredIconTopY = top;
                 }
             }
-
-            if (divPtr < _dividerAfterIndices.Count && _dividerAfterIndices[divPtr] == i)
-            {
-                var div = _dividers[divPtr];
-                Canvas.SetLeft(div, left + l.RenderedSize + IconGapDip + 4);
-                Canvas.SetTop(div, IconsCanvas.Height - 10 - baseSize * 0.86);
-                xShift += 14.0;
-                divPtr++;
-            }
         }
 
-        if (hoveredVisual is not null && !_contextMenu.IsOpen)
+        for (int d = 0; d < _dividers.Count && d < layout.DividerCentersX.Count; d++)
         {
-            if (_hoveredItemId != hoveredVisual.Model.Id)
-            {
-                _hoveredItemId = hoveredVisual.Model.Id;
-                _tooltip.ShowFor(hoveredVisual.Container, hoveredVisual.Model.Title);
-            }
+            var div = _dividers[d];
+            Canvas.SetLeft(div, halfCanvas + layout.DividerCentersX[d] - 0.5);
+            Canvas.SetTop(div, IconsCanvas.Height - 10 - baseSize * 0.86);
         }
-        else if (_hoveredItemId is not null)
+
+        if (_pointerActive && hoveredVisual is not null && !_contextMenu.IsOpen)
+        {
+            _hoveredItemId = hoveredVisual.Model.Id;
+            // Continuously track live top edge of the growing icon so tooltip rises smoothly without overlapping!
+            _tooltip.ShowOrUpdate(IconsCanvas, hoveredVisual.Model.Title, hoveredIconCenterX, hoveredIconTopY);
+        }
+        else if (_hoveredItemId is not null || _tooltip.IsOpen)
         {
             _hoveredItemId = null;
             _tooltip.HideTip();

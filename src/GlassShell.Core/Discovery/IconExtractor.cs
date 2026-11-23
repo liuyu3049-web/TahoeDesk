@@ -35,7 +35,8 @@ public sealed class IconExtractor
                 if (hr != 0 || hBitmap == 0) return null;
                 try
                 {
-                    return ReadHBitmapToBgra(hBitmap);
+                    var raw = ReadHBitmapToBgra(hBitmap);
+                    return raw is not null ? IconBoundsNormalizer.TrimTransparentPadding(raw) : null;
                 }
                 finally
                 {

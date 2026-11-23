@@ -1,6 +1,8 @@
 using System;
+using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using GlassShell.Core.Glass;
+using GlassShell.Core.Shell;
 using SharpGen.Runtime;
 using Vortice.Direct3D;
 using Vortice.Direct3D11;
@@ -12,33 +14,61 @@ namespace GlassShell.UI.Glass;
 
 public sealed class DxgiBackdropSampler : IBackdropSampler
 {
+    private sealed class OutputCaptureSlot : IDisposable
+    {
+        public required ScreenRect DesktopBounds { get; init; }
+        public required IDXGIOutputDuplication Duplication { get; init; }
+        public ID3D11Texture2D? Texture { get; set; }
+        public ID3D11ShaderResourceView? Srv { get; set; }
+        public long FrameVersion { get; set; }
+
+        public void Dispose()
+        {
+            try { Duplication.Dispose(); } catch { }
+            Srv?.Dispose();
+            Texture?.Dispose();
+            Srv = null;
+            Texture = null;
+        }
+    }
+
     private readonly DxgiSamplerStateMachine _stateMachine = new();
     private readonly object _gate = new();
+    private readonly List<OutputCaptureSlot> _outputs = [];
 
     private ID3D11Device? _device;
     private ID3D11DeviceContext? _context;
     private IDirect3D9Ex? _d3d9;
     private IDirect3DDevice9Ex? _d3d9Device;
-    private IDXGIOutputDuplication? _duplication;
-    private ID3D11Texture2D? _desktopTexture;
-    private ID3D11ShaderResourceView? _desktopSrv;
     private bool _disposed;
 
     public DxgiBackdropSampler()
     {
-        TryInitializeDeviceAndDuplication();
+        TryInitializeDeviceAndDuplications();
     }
 
     public SamplerHealth Health => _stateMachine.Health;
-    public int DesktopWidth { get; private set; }
-    public int DesktopHeight { get; private set; }
+    public int DesktopWidth => _outputs.Count > 0 ? _outputs[0].DesktopBounds.Width : 0;
+    public int DesktopHeight => _outputs.Count > 0 ? _outputs[0].DesktopBounds.Height : 0;
     internal ID3D11Device? Device => _device;
     internal ID3D11DeviceContext? Context => _context;
     internal IDirect3DDevice9Ex? D3D9Device => _d3d9Device;
-    internal ID3D11ShaderResourceView? DesktopSrv => _desktopSrv;
 
     public bool TryUpdateFrame()
     {
+        return TryGetOutputForRect(new ScreenRect(0, 0, 1, 1), out _, out _, out _);
+    }
+
+    internal bool TryGetOutputForRect(
+        ScreenRect surfaceRectPx,
+        out ID3D11ShaderResourceView? srv,
+        out ScreenRect outputBounds,
+        out long frameVersion)
+    {
+        srv = null;
+        outputBounds = default;
+        frameVersion = 0;
+
         lock (_gate)
         {
             if (_disposed) return false;
@@ -46,22 +76,43 @@ public sealed class DxgiBackdropSampler : IBackdropSampler
             if (_stateMachine.Health == SamplerHealth.FallbackDegraded)
             {
                 if (!_stateMachine.ShouldRetryAcquire()) return false;
-                if (!TryAcquireDuplication()) return false;
+                if (!TryAcquireAllOutputs()) return false;
             }
 
-            if (_duplication is null || _device is null || _context is null)
+            if (_outputs.Count == 0 || _device is null || _context is null)
             {
                 _stateMachine.ReportAccessLost();
                 return false;
             }
 
+            int cx = (surfaceRectPx.Left + surfaceRectPx.Right) / 2;
+            int cy = (surfaceRectPx.Top + surfaceRectPx.Bottom) / 2;
+            OutputCaptureSlot? slot = null;
+            foreach (var candidate in _outputs)
+            {
+                var b = candidate.DesktopBounds;
+                if (cx >= b.Left && cx < b.Right && cy >= b.Top && cy < b.Bottom)
+                {
+                    slot = candidate;
+                    break;
+                }
+            }
+            slot ??= _outputs[0];
+
             IDXGIResource? desktopResource = null;
             try
             {
-                var hr = _duplication.AcquireNextFrame(0, out _, out desktopResource);
+                var hr = slot.Duplication.AcquireNextFrame(0, out _, out desktopResource);
                 if (hr == Vortice.DXGI.ResultCode.WaitTimeout)
                 {
-                    return _desktopSrv is not null;
+                    if (slot.Srv is not null)
+                    {
+                        srv = slot.Srv;
+                        outputBounds = slot.DesktopBounds;
+                        frameVersion = slot.FrameVersion;
+                        return true;
+                    }
+                    return false;
                 }
 
                 if (hr.Failure || desktopResource is null)
@@ -72,15 +123,24 @@ public sealed class DxgiBackdropSampler : IBackdropSampler
 
                 using var frameTex = desktopResource.QueryInterface<ID3D11Texture2D>();
                 var desc = frameTex.Description;
-                EnsureDesktopTexture((int)desc.Width, (int)desc.Height, desc.Format);
+                EnsureSlotTexture(slot, (int)desc.Width, (int)desc.Height, desc.Format);
 
-                if (_desktopTexture is not null)
+                if (slot.Texture is not null)
                 {
-                    _context.CopyResource(_desktopTexture, frameTex);
+                    _context.CopyResource(slot.Texture, frameTex);
+                    slot.FrameVersion++;
                 }
 
-                _duplication.ReleaseFrame();
-                return _desktopSrv is not null;
+                slot.Duplication.ReleaseFrame();
+
+                if (slot.Srv is not null)
+                {
+                    srv = slot.Srv;
+                    outputBounds = slot.DesktopBounds;
+                    frameVersion = slot.FrameVersion;
+                    return true;
+                }
+                return false;
             }
             catch (SharpGenException)
             {
@@ -94,7 +154,7 @@ public sealed class DxgiBackdropSampler : IBackdropSampler
         }
     }
 
-    private void TryInitializeDeviceAndDuplication()
+    private void TryInitializeDeviceAndDuplications()
     {
         try
         {
@@ -113,7 +173,6 @@ public sealed class DxgiBackdropSampler : IBackdropSampler
                 return;
             }
 
-            // One single shared D3D9Ex device for all WPF D3DImage surfaces (avoids multi-device leaks/corruption)
             _d3d9 = D3D9.Direct3DCreate9Ex();
             var pp = new Vortice.Direct3D9.PresentParameters
             {
@@ -132,7 +191,7 @@ public sealed class DxgiBackdropSampler : IBackdropSampler
                 CreateFlags.HardwareVertexProcessing | CreateFlags.Multithreaded | CreateFlags.FpuPreserve,
                 pp);
 
-            TryAcquireDuplication();
+            TryAcquireAllOutputs();
         }
         catch
         {
@@ -140,31 +199,44 @@ public sealed class DxgiBackdropSampler : IBackdropSampler
         }
     }
 
-    private bool TryAcquireDuplication()
+    private bool TryAcquireAllOutputs()
     {
         if (_device is null) return false;
 
-        DisposeDuplicationOnly();
+        DisposeOutputsOnly();
         try
         {
             using var dxgiDevice = _device.QueryInterface<IDXGIDevice>();
             using var adapter = dxgiDevice.GetAdapter();
-            if (adapter.EnumOutputs(0, out IDXGIOutput output).Failure || output is null)
+
+            uint idx = 0;
+            while (adapter.EnumOutputs(idx, out IDXGIOutput output).Success && output is not null)
             {
-                _stateMachine.ReportAccessLost();
-                return false;
+                idx++;
+                using (output)
+                {
+                    var desc = output.Description;
+                    if (!desc.AttachedToDesktop) continue;
+                    try
+                    {
+                        using var output1 = output.QueryInterface<IDXGIOutput1>();
+                        var coords = desc.DesktopCoordinates;
+                        var bounds = new ScreenRect(coords.Left, coords.Top, coords.Right, coords.Bottom);
+                        var dup = output1.DuplicateOutput(_device);
+                        _outputs.Add(new OutputCaptureSlot { DesktopBounds = bounds, Duplication = dup });
+                    }
+                    catch { }
+                }
             }
 
-            using (output)
-            using (var output1 = output.QueryInterface<IDXGIOutput1>())
+            if (_outputs.Count > 0)
             {
-                var bounds = output.Description.DesktopCoordinates;
-                DesktopWidth = bounds.Right - bounds.Left;
-                DesktopHeight = bounds.Bottom - bounds.Top;
-                _duplication = output1.DuplicateOutput(_device);
                 _stateMachine.MarkAcquired();
                 return true;
             }
+
+            _stateMachine.ReportAccessLost();
+            return false;
         }
         catch
         {
@@ -173,16 +245,16 @@ public sealed class DxgiBackdropSampler : IBackdropSampler
         }
     }
 
-    private void EnsureDesktopTexture(int width, int height, Vortice.DXGI.Format format)
+    private void EnsureSlotTexture(OutputCaptureSlot slot, int width, int height, Vortice.DXGI.Format format)
     {
         if (_device is null) return;
-        if (_desktopTexture is not null && DesktopWidth == width && DesktopHeight == height) return;
+        if (slot.Texture is not null && slot.Texture.Description.Width == (uint)width && slot.Texture.Description.Height == (uint)height)
+        {
+            return;
+        }
 
-        _desktopSrv?.Dispose();
-        _desktopTexture?.Dispose();
-
-        DesktopWidth = width;
-        DesktopHeight = height;
+        slot.Srv?.Dispose();
+        slot.Texture?.Dispose();
 
         var texDesc = new Texture2DDescription
         {
@@ -198,20 +270,20 @@ public sealed class DxgiBackdropSampler : IBackdropSampler
             MiscFlags = ResourceOptionFlags.None
         };
 
-        _desktopTexture = _device.CreateTexture2D(texDesc);
-        _desktopSrv = _device.CreateShaderResourceView(_desktopTexture);
+        slot.Texture = _device.CreateTexture2D(texDesc);
+        slot.Srv = _device.CreateShaderResourceView(slot.Texture);
     }
 
     private void HandleAccessLost()
     {
-        DisposeDuplicationOnly();
+        DisposeOutputsOnly();
         _stateMachine.ReportAccessLost();
     }
 
-    private void DisposeDuplicationOnly()
+    private void DisposeOutputsOnly()
     {
-        try { _duplication?.Dispose(); } catch { }
-        _duplication = null;
+        foreach (var o in _outputs) o.Dispose();
+        _outputs.Clear();
     }
 
     public void Dispose()
@@ -220,15 +292,11 @@ public sealed class DxgiBackdropSampler : IBackdropSampler
         {
             if (_disposed) return;
             _disposed = true;
-            DisposeDuplicationOnly();
-            _desktopSrv?.Dispose();
-            _desktopTexture?.Dispose();
+            DisposeOutputsOnly();
             _d3d9Device?.Dispose();
             _d3d9?.Dispose();
             _context?.Dispose();
             _device?.Dispose();
-            _desktopSrv = null;
-            _desktopTexture = null;
             _d3d9Device = null;
             _d3d9 = null;
             _context = null;
