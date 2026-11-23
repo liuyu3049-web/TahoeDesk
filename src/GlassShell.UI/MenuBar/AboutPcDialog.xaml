@@ -14,7 +14,8 @@
     <Grid>
         <glass:LiquidGlassSurface x:Name="GlassBackdrop"
                                   CornerRadius="20"
-                                  ShadowPadding="14"
+                                  ShadowPadding="16"
+                                  IsOverlayCard="True"
                                   IsDarkMode="True" />
         <StackPanel Margin="28,24,28,24" HorizontalAlignment="Center">
             <Border Width="64" Height="64" CornerRadius="16" Background="#280A84FF" Margin="0,6,0,14">

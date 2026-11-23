@@ -39,7 +39,7 @@ public sealed class DxgiSamplerStateMachineTests
     }
 
     [Fact]
-    public void FromPreset_ProducesIncreasingTintAlphaFromClearToFrosted()
+    public void FromPreset_ProducesIncreasingTintAlphaAndSubtleNonGarishRefraction()
     {
         var clear = GlassRenderParams.FromPreset(GlassOpacityPreset.Clear, false, 20f);
         var balanced = GlassRenderParams.FromPreset(GlassOpacityPreset.Balanced, false, 20f);
@@ -47,5 +47,9 @@ public sealed class DxgiSamplerStateMachineTests
         Assert.True(clear.TintAlpha < balanced.TintAlpha && balanced.TintAlpha < frosted.TintAlpha);
         Assert.Equal(20f, clear.CornerRadiusPx);
         Assert.True(clear.RefractionBandPx > 0f);
+        Assert.True(clear.RefractionStrength <= 0.006f, "Refraction must be subtle to avoid colored stripe artifacts");
+
+        var menuDark = GlassRenderParams.FromPreset(GlassOpacityPreset.Clear, isDarkMode: true, cornerRadiusPx: 12f, isOverlayCard: true);
+        Assert.True(menuDark.TintAlpha >= 0.55f, "Overlay menus/settings need high enough tint over bright backgrounds");
     }
 }

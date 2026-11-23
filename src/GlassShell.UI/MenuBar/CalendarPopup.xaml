@@ -6,43 +6,46 @@
        PopupAnimation="Fade"
        StaysOpen="False"
        Placement="Bottom">
-    <Grid Width="296">
+    <Grid Width="312"
+          TextOptions.TextFormattingMode="Display"
+          TextOptions.TextRenderingMode="ClearType">
         <glass:LiquidGlassSurface x:Name="GlassBackdrop"
                                   CornerRadius="16"
-                                  ShadowPadding="12"
+                                  ShadowPadding="16"
+                                  IsOverlayCard="True"
                                   IsDarkMode="True" />
-        <StackPanel Margin="22,20,22,20">
+        <StackPanel Margin="26,24,26,24">
             <DockPanel Margin="0,0,0,10">
                 <TextBlock x:Name="MonthTitleText"
                            FontSize="15"
                            FontWeight="SemiBold"
-                           Foreground="#F5FFFFFF"
+                           Foreground="{DynamicResource CalFgBrush}"
                            VerticalAlignment="Center" />
                 <StackPanel Orientation="Horizontal" DockPanel.Dock="Right" HorizontalAlignment="Right">
-                    <Button Content="‹" Width="24" Height="24" Background="Transparent" Foreground="#DDFFFFFF" BorderThickness="0" Click="OnPrevMonthClick" />
-                    <Button Content="今天" Padding="6,0" Height="24" Background="Transparent" Foreground="#DDFFFFFF" BorderThickness="0" FontSize="11" Click="OnTodayClick" />
-                    <Button Content="›" Width="24" Height="24" Background="Transparent" Foreground="#DDFFFFFF" BorderThickness="0" Click="OnNextMonthClick" />
+                    <Button Content="‹" Width="24" Height="24" Background="Transparent" Foreground="{DynamicResource CalFgBrush}" BorderThickness="0" Click="OnPrevMonthClick" />
+                    <Button Content="今天" Padding="6,0" Height="24" Background="Transparent" Foreground="{DynamicResource CalFgBrush}" BorderThickness="0" FontSize="11" Click="OnTodayClick" />
+                    <Button Content="›" Width="24" Height="24" Background="Transparent" Foreground="{DynamicResource CalFgBrush}" BorderThickness="0" Click="OnNextMonthClick" />
                 </StackPanel>
             </DockPanel>
 
             <UniformGrid Columns="7" Margin="0,0,0,6">
-                <TextBlock Text="日" HorizontalAlignment="Center" FontSize="11" Foreground="#99FFFFFF" />
-                <TextBlock Text="一" HorizontalAlignment="Center" FontSize="11" Foreground="#99FFFFFF" />
-                <TextBlock Text="二" HorizontalAlignment="Center" FontSize="11" Foreground="#99FFFFFF" />
-                <TextBlock Text="三" HorizontalAlignment="Center" FontSize="11" Foreground="#99FFFFFF" />
-                <TextBlock Text="四" HorizontalAlignment="Center" FontSize="11" Foreground="#99FFFFFF" />
-                <TextBlock Text="五" HorizontalAlignment="Center" FontSize="11" Foreground="#99FFFFFF" />
-                <TextBlock Text="六" HorizontalAlignment="Center" FontSize="11" Foreground="#99FFFFFF" />
+                <TextBlock Text="日" HorizontalAlignment="Center" FontSize="11" Foreground="{DynamicResource CalSubtleBrush}" />
+                <TextBlock Text="一" HorizontalAlignment="Center" FontSize="11" Foreground="{DynamicResource CalSubtleBrush}" />
+                <TextBlock Text="二" HorizontalAlignment="Center" FontSize="11" Foreground="{DynamicResource CalSubtleBrush}" />
+                <TextBlock Text="三" HorizontalAlignment="Center" FontSize="11" Foreground="{DynamicResource CalSubtleBrush}" />
+                <TextBlock Text="四" HorizontalAlignment="Center" FontSize="11" Foreground="{DynamicResource CalSubtleBrush}" />
+                <TextBlock Text="五" HorizontalAlignment="Center" FontSize="11" Foreground="{DynamicResource CalSubtleBrush}" />
+                <TextBlock Text="六" HorizontalAlignment="Center" FontSize="11" Foreground="{DynamicResource CalSubtleBrush}" />
             </UniformGrid>
 
             <UniformGrid x:Name="DaysGrid" Columns="7" Rows="6" Height="168" />
 
-            <Border Height="1" Background="#28FFFFFF" Margin="0,10,0,10" />
+            <Border Height="1" Background="{DynamicResource CalDividerBrush}" Margin="0,10,0,10" />
             <Button x:Name="OpenNotificationCenterButton"
                     Content="打开 Windows 通知中心 (Win+N)"
                     Height="30"
-                    Background="#28FFFFFF"
-                    Foreground="#F5FFFFFF"
+                    Background="{DynamicResource CalBtnBgBrush}"
+                    Foreground="{DynamicResource CalFgBrush}"
                     BorderThickness="0"
                     FontSize="12"
                     Click="OnOpenNotificationCenterClick">
@@ -53,7 +56,7 @@
                         </Border>
                         <ControlTemplate.Triggers>
                             <Trigger Property="IsMouseOver" Value="True">
-                                <Setter TargetName="Bd" Property="Background" Value="#40FFFFFF" />
+                                <Setter TargetName="Bd" Property="Opacity" Value="0.82" />
                             </Trigger>
                         </ControlTemplate.Triggers>
                     </ControlTemplate>

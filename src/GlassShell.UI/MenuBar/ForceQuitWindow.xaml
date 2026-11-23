@@ -14,7 +14,8 @@
     <Grid>
         <glass:LiquidGlassSurface x:Name="GlassBackdrop"
                                   CornerRadius="18"
-                                  ShadowPadding="14"
+                                  ShadowPadding="16"
+                                  IsOverlayCard="True"
                                   IsDarkMode="True" />
         <DockPanel Margin="26,22,26,22">
             <TextBlock DockPanel.Dock="Top"

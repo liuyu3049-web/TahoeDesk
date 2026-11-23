@@ -31,12 +31,13 @@ public partial class DockWindow : Window
 
     private const double IconGapDip = 8.0;
     private const double CapsuleHorizontalPadDip = 14.0;
-    private const double CapsuleShadowPadDip = 12.0;
+    private const double CapsuleShadowPadDip = 16.0;
 
     private readonly MonitorContext _monitor;
     private readonly IconExtractor _iconExtractor = new();
     private readonly RecycleBinService _recycleBinService = new();
     private readonly SpringBounceAnimator _bounceAnimator = new();
+    private readonly DockHoverAnimator _hoverAnimator = new();
     private readonly DockAutoHideController _autoHideController = new();
     private readonly DxgiBackdropSampler _sampler;
     private readonly DockTooltipPopup _tooltip = new();
@@ -51,8 +52,8 @@ public partial class DockWindow : Window
     private bool _isDarkMode;
     private IReadOnlyList<DockItemModel> _lastItems = [];
     private double? _rawPointerX;
-    private double _smoothedPointerX;
     private bool _pointerActive;
+    private double _lastFrameSeconds;
     private double? _bottomEdgeEnterMs;
     private double _currentSlideY;
     private bool _yieldForTray;
@@ -176,8 +177,7 @@ public partial class DockWindow : Window
         {
             Width = _settings.DockIconSize,
             Height = _settings.DockIconSize,
-            CornerRadius = new CornerRadius(_settings.DockIconSize * 0.22),
-            ClipToBounds = true,
+            Background = Brushes.Transparent,
             Child = iconContent
         };
 
@@ -287,70 +287,48 @@ public partial class DockWindow : Window
                     PixelFormats.Bgra32, null, raw.BgraPixels, raw.Width * 4);
                 bmp.Freeze();
 
-                bool needsSquirclePlate = IconShapeAnalyzer.HasTransparentCorners(raw);
-                if (needsSquirclePlate)
-                {
-                    // Harmonize Win32 silhouette logos inside a unified macOS Tahoe Squircle tile
-                    var plateBg = new LinearGradientBrush(
-                        Color.FromRgb(0xF8, 0xFA, 0xFE),
-                        Color.FromRgb(0xDC, 0xE3, 0xF0),
-                        90);
-                    return new Border
-                    {
-                        Background = plateBg,
-                        BorderBrush = new SolidColorBrush(Color.FromArgb(0x66, 0xFF, 0xFF, 0xFF)),
-                        BorderThickness = new Thickness(0.75),
-                        Child = new Image
-                        {
-                            Source = bmp,
-                            Stretch = Stretch.Uniform,
-                            Margin = new Thickness(6.5)
-                        }
-                    };
-                }
-
+                // Pure silhouette icon without square backing plate (per user preference)
                 return new Image
                 {
                     Source = bmp,
-                    Stretch = Stretch.UniformToFill
+                    Stretch = Stretch.Uniform,
+                    Margin = new Thickness(1)
                 };
             }
         }
 
-        return new Border
+        return new System.Windows.Shapes.Ellipse
         {
-            Background = new LinearGradientBrush(Color.FromRgb(0x3B, 0x82, 0xF6), Color.FromRgb(0x1D, 0x4E, 0xD8), 45),
-            Child = new TextBlock
-            {
-                Text = string.IsNullOrEmpty(model.Title) ? "?" : model.Title[..1],
-                Foreground = Brushes.White,
-                FontWeight = FontWeights.Bold,
-                FontSize = 20,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center
-            }
+            Fill = new LinearGradientBrush(Color.FromRgb(0x5A, 0xC8, 0xFA), Color.FromRgb(0x0A, 0x84, 0xFF), 45),
+            Margin = new Thickness(4)
         };
     }
 
     private static UIElement BuildExplorerVectorIcon()
     {
-        var bg = new LinearGradientBrush(Color.FromRgb(0x5A, 0xC8, 0xFA), Color.FromRgb(0x00, 0x7A, 0xFF), 90);
-        return new Border
+        // Transparent-background macOS-style layered blue folder silhouette (no square box)
+        var grid = new Grid { Margin = new Thickness(2) };
+        grid.Children.Add(new System.Windows.Shapes.Path
         {
-            Background = bg,
-            Child = new System.Windows.Shapes.Path
-            {
-                Data = Geometry.Parse("M3,6 C3,4.9 3.9,4 5,4 H11 L13,6.5 H21 C22.1,6.5 23,7.4 23,8.5 V19 C23,20.1 22.1,21 21,21 H5 C3.9,21 3,20.1 3,19 Z"),
-                Fill = new SolidColorBrush(Color.FromArgb(0xEE, 0xFF, 0xFF, 0xFF)),
-                Stretch = Stretch.Uniform,
-                Margin = new Thickness(9)
-            }
-        };
+            Data = Geometry.Parse("M2,6.5 C2,4.8 3.3,3.5 5,3.5 H10.2 C11.1,3.5 11.9,3.9 12.5,4.6 L13.8,6.2 H21 C22.7,6.2 24,7.5 24,9.2 V19.2 C24,20.9 22.7,22.2 21,22.2 H5 C3.3,22.2 2,20.9 2,19.2 Z"),
+            Fill = new LinearGradientBrush(Color.FromRgb(0x70, 0xD6, 0xFF), Color.FromRgb(0x0A, 0x84, 0xFF), 90),
+            Stretch = Stretch.Uniform
+        });
+        grid.Children.Add(new System.Windows.Shapes.Path
+        {
+            Data = Geometry.Parse("M2,9.5 C2,8.4 2.9,7.5 4,7.5 H22 C23.1,7.5 24,8.4 24,9.5 V19.2 C24,20.9 22.7,22.2 21,22.2 H5 C3.3,22.2 2,20.9 2,19.2 Z"),
+            Fill = new LinearGradientBrush(Color.FromRgb(0x52, 0xC4, 0xFF), Color.FromRgb(0x00, 0x6E, 0xF5), 90),
+            Stroke = new SolidColorBrush(Color.FromArgb(0x66, 0xFF, 0xFF, 0xFF)),
+            StrokeThickness = 0.6,
+            Stretch = Stretch.Uniform
+        });
+        return grid;
     }
 
     private static UIElement BuildLaunchpadVectorIcon()
     {
-        var grid = new System.Windows.Controls.Primitives.UniformGrid { Rows = 3, Columns = 3, Margin = new Thickness(7) };
+        // Transparent-background floating 3x3 colorful macOS Launchpad dots silhouette (no square box)
+        var grid = new System.Windows.Controls.Primitives.UniformGrid { Rows = 3, Columns = 3, Margin = new Thickness(4) };
         Color[] palette =
         [
             Color.FromRgb(0xFF, 0x5E, 0x57), Color.FromRgb(0xFF, 0xBD, 0x2E), Color.FromRgb(0x28, 0xCD, 0x41),
@@ -359,51 +337,47 @@ public partial class DockWindow : Window
         ];
         foreach (var c in palette)
         {
-            grid.Children.Add(new Border
+            grid.Children.Add(new Ellipse
             {
-                Margin = new Thickness(1.5),
-                CornerRadius = new CornerRadius(3),
-                Background = new SolidColorBrush(c)
+                Margin = new Thickness(2.2),
+                Fill = new SolidColorBrush(c)
             });
         }
-
-        return new Border
-        {
-            Background = new LinearGradientBrush(Color.FromRgb(0xE8, 0xEC, 0xF4), Color.FromRgb(0xC5, 0xCD, 0xDC), 90),
-            Child = grid
-        };
+        return grid;
     }
 
     private static UIElement BuildRecycleBinVectorIcon(bool isEmpty)
     {
-        var bg = new LinearGradientBrush(
-            isEmpty ? Color.FromRgb(0xDC, 0xE1, 0xEA) : Color.FromRgb(0xB8, 0xC4, 0xD6),
-            Color.FromRgb(0x8E, 0x99, 0xAB),
-            90);
-        return new Border
+        // Transparent-background translucent metallic mesh trash bin silhouette (no square box)
+        var grid = new Grid { Margin = new Thickness(3) };
+        grid.Children.Add(new System.Windows.Shapes.Path
         {
-            Background = bg,
-            Child = new System.Windows.Shapes.Path
-            {
-                Data = Geometry.Parse("M6,7 H18 L17,20 C17,21 16.2,21.5 15.2,21.5 H8.8 C7.8,21.5 7,21 7,20 Z M4,5 H20 M9,5 V3.5 H15 V5"),
-                Stroke = new SolidColorBrush(Color.FromRgb(0x2C, 0x31, 0x3A)),
-                StrokeThickness = 1.8,
-                Fill = isEmpty ? Brushes.Transparent : new SolidColorBrush(Color.FromArgb(0x70, 0xFF, 0xFF, 0xFF)),
-                Stretch = Stretch.Uniform,
-                Margin = new Thickness(9)
-            }
-        };
+            Data = Geometry.Parse("M5.5,6.5 H18.5 L17.1,20.5 C17,21.6 16.1,22.5 15,22.5 H9 C7.9,22.5 7,21.6 6.9,20.5 Z"),
+            Fill = new LinearGradientBrush(
+                isEmpty ? Color.FromArgb(0x88, 0xE6, 0xEC, 0xF5) : Color.FromArgb(0xBB, 0xD8, 0xE2, 0xF0),
+                Color.FromArgb(0xAA, 0x98, 0xA4, 0xB8),
+                90),
+            Stroke = new SolidColorBrush(Color.FromArgb(0xCC, 0xFF, 0xFF, 0xFF)),
+            StrokeThickness = 1.2,
+            Stretch = Stretch.Uniform
+        });
+        grid.Children.Add(new System.Windows.Shapes.Path
+        {
+            Data = Geometry.Parse("M4.2,5.5 H19.8 M9.2,5.5 V3.6 C9.2,3.1 9.6,2.8 10.1,2.8 H13.9 C14.4,2.8 14.8,3.1 14.8,3.6 V5.5 M9.8,9.5 L10.2,19 M12,9.5 V19 M14.2,9.5 L13.8,19"),
+            Stroke = new SolidColorBrush(Color.FromArgb(0xDD, 0x38, 0x42, 0x52)),
+            StrokeThickness = 1.35,
+            StrokeStartLineCap = PenLineCap.Round,
+            StrokeEndLineCap = PenLineCap.Round,
+            Stretch = Stretch.Uniform
+        });
+        return grid;
     }
 
     private void OnIconsMouseMove(object sender, MouseEventArgs e)
     {
         var pt = e.GetPosition(IconsCanvas);
         _rawPointerX = pt.X;
-        if (!_pointerActive)
-        {
-            _smoothedPointerX = pt.X;
-            _pointerActive = true;
-        }
+        _pointerActive = true;
     }
 
     private void OnIconsMouseLeave(object sender, MouseEventArgs e)
@@ -418,11 +392,11 @@ public partial class DockWindow : Window
     {
         if (!IsVisible) return;
 
-        if (_rawPointerX.HasValue)
-        {
-            _smoothedPointerX += (_rawPointerX.Value - _smoothedPointerX) * 0.32;
-        }
+        double nowSec = _clock.Elapsed.TotalSeconds;
+        double dt = _lastFrameSeconds > 0 ? nowSec - _lastFrameSeconds : 0.016;
+        _lastFrameSeconds = nowSec;
 
+        _hoverAnimator.Step(_pointerActive, _rawPointerX, dt);
         LayoutFrame();
 
         bool isAtBottomEdge = false;
@@ -464,14 +438,15 @@ public partial class DockWindow : Window
         if (_slots.Count == 0) return;
 
         double baseSize = _settings.DockIconSize;
-        double? pointer = _pointerActive ? _smoothedPointerX : null;
+        double? pointer = _hoverAnimator.EffectivePointerX;
+        double effectiveScale = 1.0 + (_settings.DockMagnificationScale - 1.0) * _hoverAnimator.HoverAmount;
         var layouts = DockMagnificationCalculator.Compute(
             _slots.Count,
             baseSize,
             IconGapDip,
             pointer,
-            _settings.DockMagnificationEnabled,
-            _settings.DockMagnificationScale);
+            _settings.DockMagnificationEnabled && _hoverAnimator.HoverAmount > 0.003,
+            effectiveScale);
 
         double nowSec = _clock.Elapsed.TotalSeconds;
         double dividerExtraWidth = _dividers.Count * 14.0;
@@ -497,7 +472,6 @@ public partial class DockWindow : Window
 
             slot.IconFrame.Width = l.RenderedSize;
             slot.IconFrame.Height = l.RenderedSize;
-            slot.IconFrame.CornerRadius = new CornerRadius(l.RenderedSize * 0.22);
             slot.Container.Width = l.RenderedSize;
             slot.Container.Height = l.RenderedSize + 10;
 

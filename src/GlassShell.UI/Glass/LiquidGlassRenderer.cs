@@ -17,12 +17,15 @@ public sealed class LiquidGlassRenderer : IDisposable
 {
     private readonly DxgiBackdropSampler _sampler;
     private ID3D11VertexShader? _vs;
-    private ID3D11PixelShader? _ps;
+    private ID3D11PixelShader? _psBlurH;
+    private ID3D11PixelShader? _psComposite;
     private ID3D11SamplerState? _linearSampler;
     private ID3D11Buffer? _constantBuffer;
 
-    private IDirect3D9Ex? _d3d9;
-    private IDirect3DDevice9Ex? _d3d9Device;
+    private ID3D11Texture2D? _tempBlurTex;
+    private ID3D11RenderTargetView? _tempBlurRtv;
+    private ID3D11ShaderResourceView? _tempBlurSrv;
+
     private ID3D11Texture2D? _renderTarget;
     private ID3D11RenderTargetView? _rtv;
     private IDirect3DTexture9? _sharedD3d9Tex;
@@ -40,7 +43,11 @@ public sealed class LiquidGlassRenderer : IDisposable
 
     public nint SharedD3D9SurfacePtr => _sharedD3d9Surface?.NativePointer ?? 0;
 
-    public bool RenderSurface(ScreenRect surfaceRectPx, GlassRenderParams glassParams, float shadowPaddingPx)
+    public bool RenderSurface(
+        ScreenRect surfaceRectPx,
+        GlassRenderParams glassParams,
+        float shadowPaddingPx,
+        Action beforeRecreateTargets)
     {
         if (_disposed || surfaceRectPx.Width <= 4 || surfaceRectPx.Height <= 4) return false;
         if (!_sampler.TryUpdateFrame()) return false;
@@ -48,7 +55,9 @@ public sealed class LiquidGlassRenderer : IDisposable
         var device = _sampler.Device;
         var ctx = _sampler.Context;
         var srv = _sampler.DesktopSrv;
-        if (device is null || ctx is null || srv is null || _sampler.DesktopWidth <= 0 || _sampler.DesktopHeight <= 0)
+        var d3d9Device = _sampler.D3D9Device;
+        if (device is null || ctx is null || srv is null || d3d9Device is null
+            || _sampler.DesktopWidth <= 0 || _sampler.DesktopHeight <= 0)
         {
             return false;
         }
@@ -58,7 +67,7 @@ public sealed class LiquidGlassRenderer : IDisposable
             return false;
         }
 
-        if (!EnsureRenderTarget(device, surfaceRectPx.Width, surfaceRectPx.Height))
+        if (!EnsureRenderTargets(device, d3d9Device, surfaceRectPx.Width, surfaceRectPx.Height, beforeRecreateTargets))
         {
             return false;
         }
@@ -86,21 +95,30 @@ public sealed class LiquidGlassRenderer : IDisposable
                 IsDarkMode = glassParams.IsDarkMode ? 1.0f : 0.0f
             };
 
+            var vp = new Vortice.Mathematics.Viewport(0, 0, surfaceRectPx.Width, surfaceRectPx.Height);
             ctx.UpdateSubresource(in cb, _constantBuffer!);
-            ctx.OMSetRenderTargets(_rtv!);
-            ctx.RSSetViewport(new Vortice.Mathematics.Viewport(0, 0, surfaceRectPx.Width, surfaceRectPx.Height));
-            ctx.ClearRenderTargetView(_rtv!, new Color4(0, 0, 0, 0));
-
             ctx.IASetPrimitiveTopology(PrimitiveTopology.TriangleList);
             ctx.IASetInputLayout(null);
             ctx.VSSetShader(_vs);
-            ctx.PSSetShader(_ps);
             ctx.PSSetConstantBuffer(0, _constantBuffer);
-            ctx.PSSetShaderResource(0, srv);
             ctx.PSSetSampler(0, _linearSampler);
+            ctx.RSSetViewport(vp);
 
+            // Pass 1: Horizontal 15-tap Gaussian blur from desktop texture -> _tempBlurTex
+            ctx.OMSetRenderTargets(_tempBlurRtv!);
+            ctx.PSSetShader(_psBlurH);
+            ctx.PSSetShaderResource(0, srv);
             ctx.Draw(3, 0);
             ctx.PSSetShaderResource(0, null!);
+
+            // Pass 2: Vertical 15-tap Gaussian blur + Squircle SDF + clean Liquid Glass -> _renderTarget
+            ctx.OMSetRenderTargets(_rtv!);
+            ctx.ClearRenderTargetView(_rtv!, new Color4(0, 0, 0, 0));
+            ctx.PSSetShader(_psComposite);
+            ctx.PSSetShaderResource(0, _tempBlurSrv!);
+            ctx.Draw(3, 0);
+            ctx.PSSetShaderResource(0, null!);
+
             ctx.Flush();
             return SharedD3D9SurfacePtr != 0;
         }
@@ -119,10 +137,12 @@ public sealed class LiquidGlassRenderer : IDisposable
 
             string hlsl = File.ReadAllText(shaderPath);
             var vsBlob = Compiler.Compile(hlsl, "VSMain", shaderPath, "vs_5_0");
-            var psBlob = Compiler.Compile(hlsl, "PSMain", shaderPath, "ps_5_0");
+            var psBlurBlob = Compiler.Compile(hlsl, "PSBlurH", shaderPath, "ps_5_0");
+            var psCompBlob = Compiler.Compile(hlsl, "PSComposite", shaderPath, "ps_5_0");
 
             _vs = device.CreateVertexShader(vsBlob.Span);
-            _ps = device.CreatePixelShader(psBlob.Span);
+            _psBlurH = device.CreatePixelShader(psBlurBlob.Span);
+            _psComposite = device.CreatePixelShader(psCompBlob.Span);
 
             _linearSampler = device.CreateSamplerState(new SamplerDescription
             {
@@ -139,24 +159,6 @@ public sealed class LiquidGlassRenderer : IDisposable
                 BindFlags = BindFlags.ConstantBuffer
             });
 
-            _d3d9 = D3D9.Direct3DCreate9Ex();
-            var pp = new Vortice.Direct3D9.PresentParameters
-            {
-                Windowed = true,
-                SwapEffect = Vortice.Direct3D9.SwapEffect.Discard,
-                BackBufferFormat = Vortice.Direct3D9.Format.A8R8G8B8,
-                BackBufferWidth = 1,
-                BackBufferHeight = 1,
-                DeviceWindowHandle = GetDesktopWindow(),
-                PresentationInterval = PresentInterval.Immediate
-            };
-            _d3d9Device = _d3d9.CreateDeviceEx(
-                0,
-                DeviceType.Hardware,
-                GetDesktopWindow(),
-                CreateFlags.HardwareVertexProcessing | CreateFlags.Multithreaded | CreateFlags.FpuPreserve,
-                pp);
-
             _initialized = true;
             return true;
         }
@@ -166,18 +168,26 @@ public sealed class LiquidGlassRenderer : IDisposable
         }
     }
 
-    private bool EnsureRenderTarget(ID3D11Device device, int width, int height)
+    private bool EnsureRenderTargets(
+        ID3D11Device device,
+        IDirect3DDevice9Ex d3d9Device,
+        int width,
+        int height,
+        Action beforeRecreateTargets)
     {
-        if (_renderTarget is not null && _rtWidth == width && _rtHeight == height && _sharedD3d9Surface is not null)
+        if (_renderTarget is not null && _tempBlurTex is not null
+            && _rtWidth == width && _rtHeight == height && _sharedD3d9Surface is not null)
         {
             return true;
         }
 
+        // CRITICAL: Always detach WPF D3DImage backbuffer BEFORE freeing the underlying D3D9 surface!
+        beforeRecreateTargets();
         DisposeTargets();
 
         try
         {
-            var desc = new Texture2DDescription
+            var tempDesc = new Texture2DDescription
             {
                 Width = (uint)width,
                 Height = (uint)height,
@@ -187,17 +197,21 @@ public sealed class LiquidGlassRenderer : IDisposable
                 SampleDescription = new SampleDescription(1, 0),
                 Usage = ResourceUsage.Default,
                 BindFlags = BindFlags.RenderTarget | BindFlags.ShaderResource,
-                MiscFlags = ResourceOptionFlags.Shared
+                MiscFlags = ResourceOptionFlags.None
             };
+            _tempBlurTex = device.CreateTexture2D(tempDesc);
+            _tempBlurRtv = device.CreateRenderTargetView(_tempBlurTex);
+            _tempBlurSrv = device.CreateShaderResourceView(_tempBlurTex);
 
-            _renderTarget = device.CreateTexture2D(desc);
+            var outDesc = tempDesc with { MiscFlags = ResourceOptionFlags.Shared };
+            _renderTarget = device.CreateTexture2D(outDesc);
             _rtv = device.CreateRenderTargetView(_renderTarget);
 
             using var dxgiRes = _renderTarget.QueryInterface<IDXGIResource>();
             nint sharedHandle = dxgiRes.SharedHandle;
-            if (sharedHandle == 0 || _d3d9Device is null) return false;
+            if (sharedHandle == 0) return false;
 
-            _sharedD3d9Tex = _d3d9Device.CreateTexture(
+            _sharedD3d9Tex = d3d9Device.CreateTexture(
                 (uint)width,
                 (uint)height,
                 1,
@@ -224,10 +238,17 @@ public sealed class LiquidGlassRenderer : IDisposable
         _sharedD3d9Tex?.Dispose();
         _rtv?.Dispose();
         _renderTarget?.Dispose();
+        _tempBlurSrv?.Dispose();
+        _tempBlurRtv?.Dispose();
+        _tempBlurTex?.Dispose();
+
         _sharedD3d9Surface = null;
         _sharedD3d9Tex = null;
         _rtv = null;
         _renderTarget = null;
+        _tempBlurSrv = null;
+        _tempBlurRtv = null;
+        _tempBlurTex = null;
         _rtWidth = 0;
         _rtHeight = 0;
     }
@@ -237,11 +258,10 @@ public sealed class LiquidGlassRenderer : IDisposable
         if (_disposed) return;
         _disposed = true;
         DisposeTargets();
-        _d3d9Device?.Dispose();
-        _d3d9?.Dispose();
         _constantBuffer?.Dispose();
         _linearSampler?.Dispose();
-        _ps?.Dispose();
+        _psComposite?.Dispose();
+        _psBlurH?.Dispose();
         _vs?.Dispose();
     }
 
@@ -260,7 +280,4 @@ public sealed class LiquidGlassRenderer : IDisposable
         public float SpecularStrength;
         public float IsDarkMode;
     }
-
-    [DllImport("user32.dll")]
-    private static extern nint GetDesktopWindow();
 }

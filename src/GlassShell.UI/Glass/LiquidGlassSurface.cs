@@ -16,7 +16,7 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
 
     public static readonly DependencyProperty ShadowPaddingProperty =
         DependencyProperty.Register(nameof(ShadowPadding), typeof(double), typeof(LiquidGlassSurface),
-            new FrameworkPropertyMetadata(10.0, FrameworkPropertyMetadataOptions.AffectsRender));
+            new FrameworkPropertyMetadata(16.0, FrameworkPropertyMetadataOptions.AffectsRender));
 
     public static readonly DependencyProperty OpacityPresetProperty =
         DependencyProperty.Register(nameof(OpacityPreset), typeof(GlassOpacityPreset), typeof(LiquidGlassSurface),
@@ -26,7 +26,12 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
         DependencyProperty.Register(nameof(IsDarkMode), typeof(bool), typeof(LiquidGlassSurface),
             new FrameworkPropertyMetadata(true, FrameworkPropertyMetadataOptions.AffectsRender));
 
+    public static readonly DependencyProperty IsOverlayCardProperty =
+        DependencyProperty.Register(nameof(IsOverlayCard), typeof(bool), typeof(LiquidGlassSurface),
+            new FrameworkPropertyMetadata(false, FrameworkPropertyMetadataOptions.AffectsRender));
+
     private readonly D3DImage _d3dImage = new();
+    private DxgiBackdropSampler? _attachedSampler;
     private LiquidGlassRenderer? _renderer;
     private nint _boundSurfacePtr;
     private bool _hasValidFrame;
@@ -69,15 +74,50 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
         set => SetValue(IsDarkModeProperty, value);
     }
 
+    public bool IsOverlayCard
+    {
+        get => (bool)GetValue(IsOverlayCardProperty);
+        set => SetValue(IsOverlayCardProperty, value);
+    }
+
     public void AttachSampler(DxgiBackdropSampler sampler)
     {
+        // Idempotent: never tear down live D3D surfaces when settings change on the same sampler!
+        if (ReferenceEquals(_attachedSampler, sampler) && _renderer is not null)
+        {
+            return;
+        }
+
+        DetachBackBuffer();
         _renderer?.Dispose();
+        _attachedSampler = sampler;
         _renderer = new LiquidGlassRenderer(sampler);
+    }
+
+    private void DetachBackBuffer()
+    {
+        if (_boundSurfacePtr != 0 || _hasValidFrame)
+        {
+            _d3dImage.Lock();
+            try
+            {
+                _d3dImage.SetBackBuffer(D3DResourceType.IDirect3DSurface9, nint.Zero);
+            }
+            catch { }
+            finally
+            {
+                _d3dImage.Unlock();
+            }
+
+            _boundSurfacePtr = 0;
+            _hasValidFrame = false;
+        }
     }
 
     private void OnRendering(object? sender, EventArgs e)
     {
         if (!IsVisible || _renderer is null || ActualWidth < 4 || ActualHeight < 4) return;
+        if (!_d3dImage.IsFrontBufferAvailable) return;
 
         var source = PresentationSource.FromVisual(this);
         if (source?.CompositionTarget is null) return;
@@ -95,10 +135,9 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
 
         float radiusPx = (float)(CornerRadius * dpiMatrix.M11);
         float shadowPadPx = (float)(ShadowPadding * dpiMatrix.M11);
-        var renderParams = GlassRenderParams.FromPreset(OpacityPreset, IsDarkMode, radiusPx);
+        var renderParams = GlassRenderParams.FromPreset(OpacityPreset, IsDarkMode, radiusPx, IsOverlayCard);
 
-        if (_d3dImage.IsFrontBufferAvailable
-            && _renderer.RenderSurface(rectPx, renderParams, shadowPadPx)
+        if (_renderer.RenderSurface(rectPx, renderParams, shadowPadPx, DetachBackBuffer)
             && _renderer.SharedD3D9SurfacePtr != 0)
         {
             _d3dImage.Lock();
@@ -125,8 +164,7 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
         }
         else if (_hasValidFrame)
         {
-            _hasValidFrame = false;
-            _boundSurfacePtr = 0;
+            DetachBackBuffer();
             InvalidateVisual();
         }
     }
@@ -143,15 +181,15 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
             return;
         }
 
-        // Graceful translucent Squircle fallback when DXGI is degraded (e.g., lock screen/RDP)
         double pad = Math.Min(ShadowPadding, Math.Min(ActualWidth, ActualHeight) * 0.25);
         var inner = new Rect(pad, pad, Math.Max(1, ActualWidth - pad * 2), Math.Max(1, ActualHeight - pad * 2));
+        byte alpha = IsOverlayCard ? (byte)(IsDarkMode ? 215 : 228) : (byte)(IsDarkMode ? 156 : 178);
         var fillColor = IsDarkMode
-            ? Color.FromArgb(148, 28, 30, 38)
-            : Color.FromArgb(172, 245, 247, 252);
+            ? Color.FromArgb(alpha, 28, 30, 38)
+            : Color.FromArgb(alpha, 246, 248, 253);
         var borderBrush = new LinearGradientBrush(
-            Color.FromArgb(IsDarkMode ? (byte)130 : (byte)200, 255, 255, 255),
-            Color.FromArgb(35, 255, 255, 255),
+            Color.FromArgb(IsDarkMode ? (byte)110 : (byte)190, 255, 255, 255),
+            Color.FromArgb(30, 255, 255, 255),
             new Point(0, 0),
             new Point(1, 1));
 
@@ -160,7 +198,10 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
 
     public void Dispose()
     {
+        CompositionTarget.Rendering -= OnRendering;
+        DetachBackBuffer();
         _renderer?.Dispose();
         _renderer = null;
+        _attachedSampler = null;
     }
 }

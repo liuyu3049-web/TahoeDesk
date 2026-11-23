@@ -1,8 +1,10 @@
 using System;
+using System.Runtime.InteropServices;
 using GlassShell.Core.Glass;
 using SharpGen.Runtime;
 using Vortice.Direct3D;
 using Vortice.Direct3D11;
+using Vortice.Direct3D9;
 using Vortice.DXGI;
 using static Vortice.Direct3D11.D3D11;
 
@@ -15,6 +17,8 @@ public sealed class DxgiBackdropSampler : IBackdropSampler
 
     private ID3D11Device? _device;
     private ID3D11DeviceContext? _context;
+    private IDirect3D9Ex? _d3d9;
+    private IDirect3DDevice9Ex? _d3d9Device;
     private IDXGIOutputDuplication? _duplication;
     private ID3D11Texture2D? _desktopTexture;
     private ID3D11ShaderResourceView? _desktopSrv;
@@ -30,6 +34,7 @@ public sealed class DxgiBackdropSampler : IBackdropSampler
     public int DesktopHeight { get; private set; }
     internal ID3D11Device? Device => _device;
     internal ID3D11DeviceContext? Context => _context;
+    internal IDirect3DDevice9Ex? D3D9Device => _d3d9Device;
     internal ID3D11ShaderResourceView? DesktopSrv => _desktopSrv;
 
     public bool TryUpdateFrame()
@@ -56,7 +61,6 @@ public sealed class DxgiBackdropSampler : IBackdropSampler
                 var hr = _duplication.AcquireNextFrame(0, out _, out desktopResource);
                 if (hr == Vortice.DXGI.ResultCode.WaitTimeout)
                 {
-                    // Desktop static since last frame — reuse existing GPU texture at zero cost.
                     return _desktopSrv is not null;
                 }
 
@@ -109,6 +113,25 @@ public sealed class DxgiBackdropSampler : IBackdropSampler
                 return;
             }
 
+            // One single shared D3D9Ex device for all WPF D3DImage surfaces (avoids multi-device leaks/corruption)
+            _d3d9 = D3D9.Direct3DCreate9Ex();
+            var pp = new Vortice.Direct3D9.PresentParameters
+            {
+                Windowed = true,
+                SwapEffect = Vortice.Direct3D9.SwapEffect.Discard,
+                BackBufferFormat = Vortice.Direct3D9.Format.A8R8G8B8,
+                BackBufferWidth = 1,
+                BackBufferHeight = 1,
+                DeviceWindowHandle = GetDesktopWindow(),
+                PresentationInterval = PresentInterval.Immediate
+            };
+            _d3d9Device = _d3d9.CreateDeviceEx(
+                0,
+                DeviceType.Hardware,
+                GetDesktopWindow(),
+                CreateFlags.HardwareVertexProcessing | CreateFlags.Multithreaded | CreateFlags.FpuPreserve,
+                pp);
+
             TryAcquireDuplication();
         }
         catch
@@ -150,7 +173,7 @@ public sealed class DxgiBackdropSampler : IBackdropSampler
         }
     }
 
-    private void EnsureDesktopTexture(int width, int height, Format format)
+    private void EnsureDesktopTexture(int width, int height, Vortice.DXGI.Format format)
     {
         if (_device is null) return;
         if (_desktopTexture is not null && DesktopWidth == width && DesktopHeight == height) return;
@@ -200,12 +223,19 @@ public sealed class DxgiBackdropSampler : IBackdropSampler
             DisposeDuplicationOnly();
             _desktopSrv?.Dispose();
             _desktopTexture?.Dispose();
+            _d3d9Device?.Dispose();
+            _d3d9?.Dispose();
             _context?.Dispose();
             _device?.Dispose();
             _desktopSrv = null;
             _desktopTexture = null;
+            _d3d9Device = null;
+            _d3d9 = null;
             _context = null;
             _device = null;
         }
     }
+
+    [DllImport("user32.dll")]
+    private static extern nint GetDesktopWindow();
 }

@@ -43,14 +43,22 @@ public partial class CalendarPopup : Popup
         }
     }
 
+    private bool _isDarkMode = true;
+
     public void ConfigureVisuals(DxgiBackdropSampler? sampler, GlassOpacityPreset preset, bool isDarkMode)
     {
+        _isDarkMode = isDarkMode;
         GlassBackdrop.OpacityPreset = preset;
         GlassBackdrop.IsDarkMode = isDarkMode;
         if (sampler is not null)
         {
             GlassBackdrop.AttachSampler(sampler);
         }
+
+        Resources["CalFgBrush"] = new SolidColorBrush(isDarkMode ? Color.FromArgb(0xF5, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0xF0, 0x12, 0x13, 0x18));
+        Resources["CalSubtleBrush"] = new SolidColorBrush(isDarkMode ? Color.FromArgb(0x99, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x99, 0x12, 0x13, 0x18));
+        Resources["CalDividerBrush"] = new SolidColorBrush(isDarkMode ? Color.FromArgb(0x28, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x22, 0x00, 0x00, 0x00));
+        Resources["CalBtnBgBrush"] = new SolidColorBrush(isDarkMode ? Color.FromArgb(0x28, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x18, 0x00, 0x00, 0x00));
     }
 
     private void RenderMonth()
@@ -83,8 +91,8 @@ public partial class CalendarPopup : Popup
                     Foreground = isToday
                         ? Brushes.White
                         : new SolidColorBrush(isCurrentMonth
-                            ? Color.FromArgb(0xEC, 0xFF, 0xFF, 0xFF)
-                            : Color.FromArgb(0x55, 0xFF, 0xFF, 0xFF)),
+                            ? (_isDarkMode ? Color.FromArgb(0xEC, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0xEC, 0x12, 0x13, 0x18))
+                            : (_isDarkMode ? Color.FromArgb(0x55, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x55, 0x12, 0x13, 0x18))),
                     HorizontalAlignment = HorizontalAlignment.Center,
                     VerticalAlignment = VerticalAlignment.Center
                 }
