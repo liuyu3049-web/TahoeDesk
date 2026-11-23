@@ -1,0 +1,40 @@
+{
+  "menus": [
+    {
+      "title": "文件",
+      "children": [
+        { "title": "新建标签页", "shortcut": "Ctrl+Shift+T" },
+        { "title": "新建窗口", "shortcut": "Ctrl+Shift+N" },
+        { "title": "关闭窗格", "shortcut": "Ctrl+Shift+W" }
+      ]
+    },
+    {
+      "title": "编辑",
+      "children": [
+        { "title": "拷贝", "shortcut": "Ctrl+Shift+C" },
+        { "title": "粘贴", "shortcut": "Ctrl+Shift+V" },
+        { "separator": true },
+        { "title": "查找…", "shortcut": "Ctrl+Shift+F" }
+      ]
+    },
+    {
+      "title": "显示",
+      "children": [
+        { "title": "放大字号", "shortcut": "Ctrl+Plus" },
+        { "title": "缩小字号", "shortcut": "Ctrl+Minus" },
+        { "title": "重置字号", "shortcut": "Ctrl+0" },
+        { "separator": true },
+        { "title": "切换全屏幕", "shortcut": "F11" }
+      ]
+    },
+    {
+      "title": "窗口",
+      "children": [
+        { "title": "打开设置", "shortcut": "Ctrl+," },
+        { "separator": true },
+        { "title": "最小化", "windowOp": "minimize" },
+        { "title": "缩放 / 最大化", "windowOp": "maximize" }
+      ]
+    }
+  ]
+}

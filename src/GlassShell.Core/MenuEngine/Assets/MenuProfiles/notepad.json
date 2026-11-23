@@ -1,0 +1,46 @@
+{
+  "menus": [
+    {
+      "title": "文件",
+      "children": [
+        { "title": "新建标签页", "shortcut": "Ctrl+N" },
+        { "title": "新建窗口", "shortcut": "Ctrl+Shift+N" },
+        { "title": "打开…", "shortcut": "Ctrl+O" },
+        { "title": "保存", "shortcut": "Ctrl+S" },
+        { "title": "另存为…", "shortcut": "Ctrl+Shift+S" },
+        { "separator": true },
+        { "title": "打印…", "shortcut": "Ctrl+P" },
+        { "title": "关闭标签页", "shortcut": "Ctrl+W" }
+      ]
+    },
+    {
+      "title": "编辑",
+      "children": [
+        { "title": "撤销", "shortcut": "Ctrl+Z" },
+        { "separator": true },
+        { "title": "剪切", "shortcut": "Ctrl+X" },
+        { "title": "拷贝", "shortcut": "Ctrl+C" },
+        { "title": "粘贴", "shortcut": "Ctrl+V" },
+        { "title": "全选", "shortcut": "Ctrl+A" },
+        { "separator": true },
+        { "title": "查找…", "shortcut": "Ctrl+F" },
+        { "title": "替换…", "shortcut": "Ctrl+H" }
+      ]
+    },
+    {
+      "title": "显示",
+      "children": [
+        { "title": "放大", "shortcut": "Ctrl+Plus" },
+        { "title": "缩小", "shortcut": "Ctrl+Minus" },
+        { "title": "还原默认缩放", "shortcut": "Ctrl+0" }
+      ]
+    },
+    {
+      "title": "窗口",
+      "children": [
+        { "title": "最小化", "windowOp": "minimize" },
+        { "title": "缩放 / 最大化", "windowOp": "maximize" }
+      ]
+    }
+  ]
+}

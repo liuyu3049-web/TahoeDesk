@@ -1,0 +1,73 @@
+{
+  "menus": [
+    {
+      "title": "文件",
+      "children": [
+        { "title": "新建标签页", "shortcut": "Ctrl+T" },
+        { "title": "新建窗口", "shortcut": "Ctrl+N" },
+        { "title": "新建无痕式窗口", "shortcut": "Ctrl+Shift+N" },
+        { "title": "重新打开关闭的标签页", "shortcut": "Ctrl+Shift+T" },
+        { "separator": true },
+        { "title": "关闭标签页", "shortcut": "Ctrl+W" },
+        { "title": "关闭窗口", "shortcut": "Ctrl+Shift+W" },
+        { "separator": true },
+        { "title": "另存为…", "shortcut": "Ctrl+S" },
+        { "title": "打印…", "shortcut": "Ctrl+P" }
+      ]
+    },
+    {
+      "title": "编辑",
+      "children": [
+        { "title": "撤销", "shortcut": "Ctrl+Z" },
+        { "title": "重做", "shortcut": "Ctrl+Y" },
+        { "separator": true },
+        { "title": "剪切", "shortcut": "Ctrl+X" },
+        { "title": "拷贝", "shortcut": "Ctrl+C" },
+        { "title": "粘贴", "shortcut": "Ctrl+V" },
+        { "title": "全选", "shortcut": "Ctrl+A" },
+        { "separator": true },
+        { "title": "在网页中查找…", "shortcut": "Ctrl+F" }
+      ]
+    },
+    {
+      "title": "显示",
+      "children": [
+        { "title": "重新加载此页", "shortcut": "Ctrl+R" },
+        { "title": "强制重新加载", "shortcut": "Ctrl+Shift+R" },
+        { "separator": true },
+        { "title": "放大", "shortcut": "Ctrl+Plus" },
+        { "title": "缩小", "shortcut": "Ctrl+Minus" },
+        { "title": "实际大小", "shortcut": "Ctrl+0" },
+        { "separator": true },
+        { "title": "切换全屏幕", "shortcut": "F11" },
+        { "title": "开发者工具", "shortcut": "F12" }
+      ]
+    },
+    {
+      "title": "标签页",
+      "children": [
+        { "title": "选择下一个标签页", "shortcut": "Ctrl+Tab" },
+        { "title": "选择上一个标签页", "shortcut": "Ctrl+Shift+Tab" },
+        { "separator": true },
+        { "title": "下载内容", "shortcut": "Ctrl+J" },
+        { "title": "历史记录", "shortcut": "Ctrl+H" }
+      ]
+    },
+    {
+      "title": "窗口",
+      "children": [
+        { "title": "最小化", "windowOp": "minimize" },
+        { "title": "缩放 / 最大化", "windowOp": "maximize" },
+        { "separator": true },
+        { "title": "左半屏", "shortcut": "Win+Left", "windowOp": "snapleft" },
+        { "title": "右半屏", "shortcut": "Win+Right", "windowOp": "snapright" }
+      ]
+    },
+    {
+      "title": "帮助",
+      "children": [
+        { "title": "Chrome 帮助", "shortcut": "F1" }
+      ]
+    }
+  ]
+}

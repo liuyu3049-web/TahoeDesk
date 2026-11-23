@@ -1,0 +1,48 @@
+{
+  "menus": [
+    {
+      "title": "文件",
+      "children": [
+        { "title": "新建", "shortcut": "Ctrl+N" },
+        { "title": "打开…", "shortcut": "Ctrl+O" },
+        { "title": "保存", "shortcut": "Ctrl+S" },
+        { "separator": true },
+        { "title": "打印…", "shortcut": "Ctrl+P" },
+        { "separator": true },
+        { "title": "关闭窗口", "shortcut": "Alt+F4", "windowOp": "close" }
+      ]
+    },
+    {
+      "title": "编辑",
+      "children": [
+        { "title": "撤销", "shortcut": "Ctrl+Z" },
+        { "title": "重做", "shortcut": "Ctrl+Y" },
+        { "separator": true },
+        { "title": "剪切", "shortcut": "Ctrl+X" },
+        { "title": "拷贝", "shortcut": "Ctrl+C" },
+        { "title": "粘贴", "shortcut": "Ctrl+V" },
+        { "title": "全选", "shortcut": "Ctrl+A" },
+        { "separator": true },
+        { "title": "查找…", "shortcut": "Ctrl+F" }
+      ]
+    },
+    {
+      "title": "窗口",
+      "children": [
+        { "title": "最小化", "windowOp": "minimize" },
+        { "title": "缩放 / 最大化", "windowOp": "maximize" },
+        { "separator": true },
+        { "title": "将窗口拼贴到屏幕左侧", "shortcut": "Win+Left", "windowOp": "snapleft" },
+        { "title": "将窗口拼贴到屏幕右侧", "shortcut": "Win+Right", "windowOp": "snapright" },
+        { "separator": true },
+        { "title": "切换窗口置顶", "windowOp": "toggletopmost" }
+      ]
+    },
+    {
+      "title": "帮助",
+      "children": [
+        { "title": "查看帮助", "shortcut": "F1" }
+      ]
+    }
+  ]
+}

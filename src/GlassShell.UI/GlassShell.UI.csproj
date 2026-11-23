@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows10.0.22621.0</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <LangVersion>12</LangVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\GlassShell.Core\GlassShell.Core.csproj" />
+    <ProjectReference Include="..\GlassShell.Watchdog\GlassShell.Watchdog.csproj" ReferenceOutputAssembly="false" />
+  </ItemGroup>
+  <Target Name="CopyWatchdogToOutput" AfterTargets="Build">
+    <ItemGroup>
+      <WatchdogFiles Include="..\GlassShell.Watchdog\bin\$(Configuration)\$(TargetFramework)\GlassShell.Watchdog.*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(WatchdogFiles)" DestinationFolder="$(OutDir)" SkipUnchangedFiles="true" />
+  </Target>
+  <ItemGroup>
+    <PackageReference Include="CommunityToolkit.Mvvm" Version="8.3.2" />
+    <PackageReference Include="Vortice.Direct3D11" Version="3.6.2" />
+    <PackageReference Include="Vortice.Direct3D9" Version="3.6.2" />
+    <PackageReference Include="Vortice.DXGI" Version="3.6.2" />
+    <PackageReference Include="Vortice.D3DCompiler" Version="3.6.2" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="Glass\Shaders\*.hlsl" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

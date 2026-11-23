@@ -1,0 +1,67 @@
+{
+  "menus": [
+    {
+      "title": "文件",
+      "children": [
+        { "title": "新建标签页", "shortcut": "Ctrl+T" },
+        { "title": "新建窗口", "shortcut": "Ctrl+N" },
+        { "title": "新建 InPrivate 窗口", "shortcut": "Ctrl+Shift+N" },
+        { "title": "重新打开关闭的标签页", "shortcut": "Ctrl+Shift+T" },
+        { "separator": true },
+        { "title": "关闭标签页", "shortcut": "Ctrl+W" },
+        { "title": "打印…", "shortcut": "Ctrl+P" }
+      ]
+    },
+    {
+      "title": "编辑",
+      "children": [
+        { "title": "撤销", "shortcut": "Ctrl+Z" },
+        { "title": "重做", "shortcut": "Ctrl+Y" },
+        { "separator": true },
+        { "title": "剪切", "shortcut": "Ctrl+X" },
+        { "title": "拷贝", "shortcut": "Ctrl+C" },
+        { "title": "粘贴", "shortcut": "Ctrl+V" },
+        { "title": "全选", "shortcut": "Ctrl+A" },
+        { "separator": true },
+        { "title": "查找…", "shortcut": "Ctrl+F" }
+      ]
+    },
+    {
+      "title": "显示",
+      "children": [
+        { "title": "刷新", "shortcut": "Ctrl+R" },
+        { "title": "放大", "shortcut": "Ctrl+Plus" },
+        { "title": "缩小", "shortcut": "Ctrl+Minus" },
+        { "title": "重置缩放", "shortcut": "Ctrl+0" },
+        { "separator": true },
+        { "title": "切换全屏幕", "shortcut": "F11" },
+        { "title": "开发者工具", "shortcut": "F12" }
+      ]
+    },
+    {
+      "title": "标签页",
+      "children": [
+        { "title": "下一个标签页", "shortcut": "Ctrl+Tab" },
+        { "title": "上一个标签页", "shortcut": "Ctrl+Shift+Tab" },
+        { "separator": true },
+        { "title": "下载", "shortcut": "Ctrl+J" },
+        { "title": "历史记录", "shortcut": "Ctrl+H" }
+      ]
+    },
+    {
+      "title": "窗口",
+      "children": [
+        { "title": "最小化", "windowOp": "minimize" },
+        { "title": "缩放 / 最大化", "windowOp": "maximize" },
+        { "title": "左半屏", "shortcut": "Win+Left", "windowOp": "snapleft" },
+        { "title": "右半屏", "shortcut": "Win+Right", "windowOp": "snapright" }
+      ]
+    },
+    {
+      "title": "帮助",
+      "children": [
+        { "title": "Edge 帮助", "shortcut": "F1" }
+      ]
+    }
+  ]
+}

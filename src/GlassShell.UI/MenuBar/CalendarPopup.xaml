@@ -1,0 +1,64 @@
+<Popup x:Class="GlassShell.UI.MenuBar.CalendarPopup"
+       xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+       xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+       xmlns:glass="clr-namespace:GlassShell.UI.Glass"
+       AllowsTransparency="True"
+       PopupAnimation="Fade"
+       StaysOpen="False"
+       Placement="Bottom">
+    <Grid Width="296">
+        <glass:LiquidGlassSurface x:Name="GlassBackdrop"
+                                  CornerRadius="16"
+                                  ShadowPadding="12"
+                                  IsDarkMode="True" />
+        <StackPanel Margin="22,20,22,20">
+            <DockPanel Margin="0,0,0,10">
+                <TextBlock x:Name="MonthTitleText"
+                           FontSize="15"
+                           FontWeight="SemiBold"
+                           Foreground="#F5FFFFFF"
+                           VerticalAlignment="Center" />
+                <StackPanel Orientation="Horizontal" DockPanel.Dock="Right" HorizontalAlignment="Right">
+                    <Button Content="‹" Width="24" Height="24" Background="Transparent" Foreground="#DDFFFFFF" BorderThickness="0" Click="OnPrevMonthClick" />
+                    <Button Content="今天" Padding="6,0" Height="24" Background="Transparent" Foreground="#DDFFFFFF" BorderThickness="0" FontSize="11" Click="OnTodayClick" />
+                    <Button Content="›" Width="24" Height="24" Background="Transparent" Foreground="#DDFFFFFF" BorderThickness="0" Click="OnNextMonthClick" />
+                </StackPanel>
+            </DockPanel>
+
+            <UniformGrid Columns="7" Margin="0,0,0,6">
+                <TextBlock Text="日" HorizontalAlignment="Center" FontSize="11" Foreground="#99FFFFFF" />
+                <TextBlock Text="一" HorizontalAlignment="Center" FontSize="11" Foreground="#99FFFFFF" />
+                <TextBlock Text="二" HorizontalAlignment="Center" FontSize="11" Foreground="#99FFFFFF" />
+                <TextBlock Text="三" HorizontalAlignment="Center" FontSize="11" Foreground="#99FFFFFF" />
+                <TextBlock Text="四" HorizontalAlignment="Center" FontSize="11" Foreground="#99FFFFFF" />
+                <TextBlock Text="五" HorizontalAlignment="Center" FontSize="11" Foreground="#99FFFFFF" />
+                <TextBlock Text="六" HorizontalAlignment="Center" FontSize="11" Foreground="#99FFFFFF" />
+            </UniformGrid>
+
+            <UniformGrid x:Name="DaysGrid" Columns="7" Rows="6" Height="168" />
+
+            <Border Height="1" Background="#28FFFFFF" Margin="0,10,0,10" />
+            <Button x:Name="OpenNotificationCenterButton"
+                    Content="打开 Windows 通知中心 (Win+N)"
+                    Height="30"
+                    Background="#28FFFFFF"
+                    Foreground="#F5FFFFFF"
+                    BorderThickness="0"
+                    FontSize="12"
+                    Click="OnOpenNotificationCenterClick">
+                <Button.Template>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="8">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="#40FFFFFF" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Button.Template>
+            </Button>
+        </StackPanel>
+    </Grid>
+</Popup>

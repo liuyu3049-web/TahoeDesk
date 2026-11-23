@@ -4,5 +4,6 @@ obj/
 *.user
 *.suo
 .superpowers/
+.tools/
 TestResults/
 *.log
