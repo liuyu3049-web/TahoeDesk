@@ -199,7 +199,7 @@ public sealed class LiquidGlassRenderer : IDisposable
         var sw = Stopwatch.StartNew();
         while (!ctx.GetData<int>(query, out _))
         {
-            if (sw.ElapsedMilliseconds >= 4) break;
+            if (sw.ElapsedMilliseconds >= 2) break;
             Thread.SpinWait(64);
         }
     }

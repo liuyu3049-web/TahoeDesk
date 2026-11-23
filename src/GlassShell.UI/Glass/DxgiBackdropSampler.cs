@@ -102,7 +102,7 @@ public sealed class DxgiBackdropSampler : IBackdropSampler
             IDXGIResource? desktopResource = null;
             try
             {
-                var hr = slot.Duplication.AcquireNextFrame(0, out _, out desktopResource);
+                var hr = slot.Duplication.AcquireNextFrame(0, out OutduplFrameInfo frameInfo, out desktopResource);
                 if (hr == Vortice.DXGI.ResultCode.WaitTimeout)
                 {
                     if (slot.Srv is not null)
@@ -119,6 +119,17 @@ public sealed class DxgiBackdropSampler : IBackdropSampler
                 {
                     HandleAccessLost();
                     return false;
+                }
+
+                // Pointer-only update (mouse cursor moved, ZERO desktop pixels changed):
+                // skip full-screen CopyResource and keep FrameVersion unchanged so all glass surfaces early-out at 0ms!
+                if (frameInfo.AccumulatedFrames == 0 && frameInfo.LastPresentTime == 0 && slot.Srv is not null)
+                {
+                    slot.Duplication.ReleaseFrame();
+                    srv = slot.Srv;
+                    outputBounds = slot.DesktopBounds;
+                    frameVersion = slot.FrameVersion;
+                    return true;
                 }
 
                 using var frameTex = desktopResource.QueryInterface<ID3D11Texture2D>();

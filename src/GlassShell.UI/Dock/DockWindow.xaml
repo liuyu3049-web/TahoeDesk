@@ -1,9 +1,11 @@
 <Window x:Class="GlassShell.UI.Dock.DockWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:dock="clr-namespace:GlassShell.UI.Dock"
         xmlns:glass="clr-namespace:GlassShell.UI.Glass"
         Title="GlassShell Dock"
-        Height="148"
+        Height="162"
+        Width="720"
         WindowStyle="None"
         AllowsTransparency="True"
         Background="Transparent"
@@ -17,22 +19,70 @@
             <TranslateTransform x:Name="SlideTransform" Y="0" />
         </Grid.RenderTransform>
 
-        <!-- Fixed full-width GPU surface (IsHitTestVisible=False); capsule width animates purely in HLSL with ZERO GPU reallocations! -->
-        <glass:LiquidGlassSurface x:Name="CapsuleGlass"
-                                  HorizontalAlignment="Stretch"
-                                  VerticalAlignment="Bottom"
-                                  Height="98"
-                                  CornerRadius="22"
-                                  ShadowPadding="16"
-                                  IsDarkMode="True" />
+        <!-- Compact fixed-size blurred backdrop clipped smoothly at 120fps via RectangleGeometry (ZERO D3D redraws during hover!) -->
+        <Grid x:Name="CapsuleHost"
+              HorizontalAlignment="Stretch"
+              VerticalAlignment="Bottom"
+              Height="70"
+              Margin="0,0,0,10"
+              IsHitTestVisible="True">
+            <glass:LiquidGlassSurface x:Name="CapsuleGlass"
+                                      HorizontalAlignment="Stretch"
+                                      VerticalAlignment="Stretch"
+                                      IsClippedBackdrop="True"
+                                      IsHitTestVisible="False"
+                                      IsDarkMode="True">
+                <glass:LiquidGlassSurface.Clip>
+                    <RectangleGeometry x:Name="CapsuleClipGeo" Rect="0,0,360,70" RadiusX="22" RadiusY="22" />
+                </glass:LiquidGlassSurface.Clip>
+            </glass:LiquidGlassSurface>
 
-        <!-- Dynamic positioned icon canvas aligned with the capsule bottom -->
+            <!-- Zero-layout-pass vector specular rim + soft drop shadow + continuous exact-capsule hit-testing -->
+            <dock:DockCapsuleRim x:Name="CapsuleRim"
+                                 HorizontalAlignment="Stretch"
+                                 VerticalAlignment="Stretch" />
+        </Grid>
+
+        <!-- Fixed-width icon canvas; icons animate purely via ScaleTransform + TranslateTransform (ZERO WPF layout passes!) -->
         <Canvas x:Name="IconsCanvas"
-                HorizontalAlignment="Center"
+                HorizontalAlignment="Stretch"
                 VerticalAlignment="Bottom"
-                Height="136"
-                Width="336"
-                Margin="0,0,0,16"
-                Background="Transparent" />
+                Height="150"
+                Margin="0,0,0,10"
+                Background="{x:Null}" />
+
+        <!-- In-window zero-HWND tooltip pill positioned via TranslateTransform (ZERO Win32 Popup SetWindowPos stalls!) -->
+        <Canvas x:Name="TooltipCanvas"
+                HorizontalAlignment="Stretch"
+                VerticalAlignment="Bottom"
+                Height="150"
+                Margin="0,0,0,10"
+                IsHitTestVisible="False">
+            <StackPanel x:Name="InlineTooltip"
+                        HorizontalAlignment="Center"
+                        Opacity="0"
+                        IsHitTestVisible="False">
+                <StackPanel.RenderTransform>
+                    <TranslateTransform x:Name="InlineTooltipTranslate" X="0" Y="0" />
+                </StackPanel.RenderTransform>
+                <Border Background="#D81D2028"
+                        BorderBrush="#48FFFFFF"
+                        BorderThickness="0.8"
+                        CornerRadius="7"
+                        Padding="10,4">
+                    <TextBlock x:Name="InlineTooltipText"
+                               Foreground="#F6FFFFFF"
+                               FontSize="12"
+                               FontFamily="Microsoft YaHei UI, Segoe UI"
+                               TextOptions.TextFormattingMode="Ideal"
+                               TextOptions.TextRenderingMode="Grayscale"
+                               HorizontalAlignment="Center" />
+                </Border>
+                <Polygon Points="0,0 10,0 5,5"
+                         Fill="#D81D2028"
+                         HorizontalAlignment="Center"
+                         Margin="0,-0.5,0,0" />
+            </StackPanel>
+        </Canvas>
     </Grid>
 </Window>

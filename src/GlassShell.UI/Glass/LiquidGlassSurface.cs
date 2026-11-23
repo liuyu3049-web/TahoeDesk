@@ -34,14 +34,25 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
         DependencyProperty.Register(nameof(ActiveBoxWidth), typeof(double), typeof(LiquidGlassSurface),
             new FrameworkPropertyMetadata(0.0));
 
+    public static readonly DependencyProperty IsClippedBackdropProperty =
+        DependencyProperty.Register(nameof(IsClippedBackdrop), typeof(bool), typeof(LiquidGlassSurface),
+            new FrameworkPropertyMetadata(false, FrameworkPropertyMetadataOptions.AffectsRender));
+
+    private static int _surfaceStaggerCounter;
+
     private readonly D3DImage _d3dImage = new();
+    private readonly System.Diagnostics.Stopwatch _throttleClock = System.Diagnostics.Stopwatch.StartNew();
+    private readonly long _staggerOffsetMs;
     private DxgiBackdropSampler? _attachedSampler;
     private LiquidGlassRenderer? _renderer;
     private nint _boundSurfacePtr;
     private bool _hasValidFrame;
+    private long _lastRenderMs = -200;
+    private const long MinBackdropRefreshIntervalMs = 66; // ~15 Hz staggered cap prevents AllowsTransparency PCIe readback stutter!
 
     public LiquidGlassSurface()
     {
+        _staggerOffsetMs = (System.Threading.Interlocked.Increment(ref _surfaceStaggerCounter) % 4) * 17L;
         IsHitTestVisible = false;
         Loaded += (_, _) =>
         {
@@ -94,6 +105,12 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
         set => SetValue(ActiveBoxWidthProperty, value);
     }
 
+    public bool IsClippedBackdrop
+    {
+        get => (bool)GetValue(IsClippedBackdropProperty);
+        set => SetValue(IsClippedBackdropProperty, value);
+    }
+
     public void AttachSampler(DxgiBackdropSampler sampler)
     {
         // Idempotent: never tear down live D3D surfaces when settings change on the same sampler!
@@ -133,6 +150,14 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
         if (!IsVisible || _renderer is null || ActualWidth < 4 || ActualHeight < 4) return;
         if (!_d3dImage.IsFrontBufferAvailable) return;
 
+        // Throttle DXGI backdrop capture/blur updates to staggered ~15Hz so WPF AllowsTransparency layered windows
+        // NEVER stall or pile up on the same frame doing GPU->CPU UpdateLayeredWindow readbacks!
+        long nowMs = _throttleClock.ElapsedMilliseconds + _staggerOffsetMs;
+        if (_hasValidFrame && (nowMs - _lastRenderMs) < MinBackdropRefreshIntervalMs)
+        {
+            return;
+        }
+
         var source = PresentationSource.FromVisual(this);
         if (source?.CompositionTarget is null) return;
 
@@ -148,13 +173,14 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
             (int)Math.Round(topLeftPx.Y) + heightPx);
 
         float radiusPx = (float)(CornerRadius * dpiMatrix.M11);
-        float shadowPadPx = (float)(ShadowPadding * dpiMatrix.M11);
+        float shadowPadPx = IsClippedBackdrop ? -1f : (float)(ShadowPadding * dpiMatrix.M11);
         float activeBoxWidthPx = ActiveBoxWidth > 1.0 ? (float)(ActiveBoxWidth * dpiMatrix.M11) : 0f;
         var renderParams = GlassRenderParams.FromPreset(OpacityPreset, IsDarkMode, radiusPx, IsOverlayCard);
 
         if (_renderer.RenderSurface(rectPx, renderParams, shadowPadPx, activeBoxWidthPx, DetachBackBuffer, out bool frameUpdated)
             && _renderer.SharedD3D9SurfacePtr != 0)
         {
+            _lastRenderMs = nowMs;
             nint ptr = _renderer.SharedD3D9SurfacePtr;
             if (frameUpdated || _boundSurfacePtr != ptr || !_hasValidFrame)
             {

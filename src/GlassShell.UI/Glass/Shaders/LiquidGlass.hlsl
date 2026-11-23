@@ -97,6 +97,19 @@ float4 PSComposite(VSOut inp) : SV_Target
 {
     float2 px = inp.UV * PixelSize;
     float2 center = PixelSize * 0.5;
+    float scaleY = (BlurRadius / 7.0) / max(PixelSize.y, 1.0);
+
+    // Fast flat blurred-backdrop mode (ShadowPadding < 0): outputs full-rect blurred & tinted glass
+    // so WPF can clip/animate the Dock Squircle capsule at 120fps with ZERO D3D11 redraws during hover!
+    if (ShadowPadding < -0.5)
+    {
+        float3 blurredFlat = SampleVerticalGaussian(inp.UV, scaleY);
+        float lumaFlat = dot(blurredFlat, float3(0.299, 0.587, 0.114));
+        blurredFlat = lerp(float3(lumaFlat, lumaFlat, lumaFlat), blurredFlat, 1.14);
+        float3 tintFlat = IsDarkMode > 0.5 ? float3(0.11, 0.12, 0.15) : float3(0.97, 0.98, 1.00);
+        float3 colFlat = lerp(blurredFlat, tintFlat, TintAlpha);
+        return float4(saturate(colFlat), 1.0);
+    }
 
     float halfW = ActiveBoxWidthPx > 1.0
         ? min(ActiveBoxWidthPx * 0.5, max(PixelSize.x * 0.5 - ShadowPadding, 1.0))
@@ -105,7 +118,7 @@ float4 PSComposite(VSOut inp) : SV_Target
     float2 halfBox = float2(halfW, halfH);
     float2 p = px - center;
 
-    // Early out completely outside shadow region (saves GPU bandwidth on wide Dock surface!)
+    // Early out completely outside shadow region
     if (abs(p.x) > halfW + ShadowPadding + 2.0 || abs(p.y) > halfH + ShadowPadding + 2.0)
     {
         return float4(0.0, 0.0, 0.0, 0.0);
@@ -129,7 +142,6 @@ float4 PSComposite(VSOut inp) : SV_Target
         return float4(0.0, 0.0, 0.0, shadowAlpha);
     }
 
-    float scaleY = (BlurRadius / 7.0) / max(PixelSize.y, 1.0);
     float2 sampleUV = inp.UV;
 
     // Subtle physical bevel refraction along rounded glass rim (skipped on flat top menu bar)
