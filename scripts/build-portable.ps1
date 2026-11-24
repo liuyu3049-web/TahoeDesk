@@ -33,8 +33,11 @@ if ($SelfContained) {
     & $dotnet build (Join-Path $repoRoot "src\GlassShell.UI\GlassShell.UI.csproj") -c Release --no-restore -m:1 /nr:false --verbosity minimal
     if ($LASTEXITCODE -ne 0) { throw "UI build failed." }
 
-    if (Test-Path $stageDir) { Remove-Item $stageDir -Recurse -Force }
-    New-Item -ItemType Directory -Path $stageDir -Force | Out-Null
+    if (Test-Path $stageDir) {
+        Get-ChildItem -Path $stageDir -Force -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+    } else {
+        New-Item -ItemType Directory -Path $stageDir -Force | Out-Null
+    }
 
     $releaseOut = Join-Path $repoRoot "src\GlassShell.UI\bin\Release\net8.0-windows10.0.22621.0"
     Copy-Item -Path (Join-Path $releaseOut "*") -Destination $stageDir -Recurse -Force
