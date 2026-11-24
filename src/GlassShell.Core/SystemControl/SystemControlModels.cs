@@ -18,6 +18,12 @@ public sealed record WifiNetworkInfo(
     bool IsSecured,
     bool HasSavedProfile);
 
+public sealed record BluetoothDeviceInfo(
+    string Name,
+    ulong Address,
+    bool IsConnected,
+    bool IsRemembered);
+
 public sealed record RadioState(
     bool HasWifi,
     bool WifiOn,

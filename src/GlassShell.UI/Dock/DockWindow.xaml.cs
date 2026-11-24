@@ -111,6 +111,32 @@ public partial class DockWindow : Window
 
     public event Action? LaunchpadRequested;
     public event Action<GlassSettings>? SettingsUpdated;
+    public event Action<nint, Point>? RestoreFromDockRequested;
+
+    public bool TryGetIconScreenCenterDip(nint hwnd, string? exePath, out Point centerDip)
+    {
+        centerDip = new Point(Left + Width * 0.5, Top + Height - 36);
+        try
+        {
+            DockSlotVisual? match = _slots.FirstOrDefault(s => hwnd != 0 && s.Model.OpenWindowHandles.Contains(hwnd));
+            if (match is null && !string.IsNullOrWhiteSpace(exePath))
+            {
+                match = _slots.FirstOrDefault(s =>
+                    !string.IsNullOrWhiteSpace(s.Model.TargetPath)
+                    && string.Equals(s.Model.TargetPath, exePath, StringComparison.OrdinalIgnoreCase));
+            }
+
+            if (match is not null && match.Container.IsLoaded)
+            {
+                var ptPx = match.Container.PointToScreen(new Point(match.Container.ActualWidth * 0.5, match.Container.ActualHeight * 0.5));
+                centerDip = new Point(ptPx.X / _monitor.DpiScale, ptPx.Y / _monitor.DpiScale);
+                return true;
+            }
+        }
+        catch { }
+
+        return true;
+    }
 
     public void ApplySettings(GlassSettings settings, bool isDarkMode)
     {
@@ -719,7 +745,7 @@ public partial class DockWindow : Window
                 _recycleBinService.Open();
                 return;
             case DockItemKind.Explorer:
-                if (model.OpenWindowHandles.Count > 0) WindowTracker.ActivateWindow(model.OpenWindowHandles[0]);
+                if (model.OpenWindowHandles.Count > 0) ActivateOrAnimateRestore(model.OpenWindowHandles[0], anchor);
                 else StartProcess("explorer.exe", "shell:MyComputerFolder");
                 return;
             case DockItemKind.Folder:
@@ -737,13 +763,34 @@ public partial class DockWindow : Window
                 }
                 return;
             case DockItemKind.MinimizedWindow:
-                if (model.OpenWindowHandles.Count > 0) WindowTracker.ActivateWindow(model.OpenWindowHandles[0]);
+                if (model.OpenWindowHandles.Count > 0) ActivateOrAnimateRestore(model.OpenWindowHandles[0], anchor);
                 return;
             case DockItemKind.Application:
-                if (model.OpenWindowHandles.Count > 0) WindowTracker.ActivateWindow(model.OpenWindowHandles[0]);
+                if (model.OpenWindowHandles.Count > 0) ActivateOrAnimateRestore(model.OpenWindowHandles[0], anchor);
                 else if (!string.IsNullOrWhiteSpace(model.TargetPath)) StartProcess(model.TargetPath, null);
                 return;
         }
+    }
+
+    private void ActivateOrAnimateRestore(nint hwnd, UIElement? anchor)
+    {
+        if (WindowDockAnimator.IsWindowMinimized(hwnd) && RestoreFromDockRequested is not null)
+        {
+            Point centerDip = new(Left + Width * 0.5, Top + Height - 36);
+            if (anchor is FrameworkElement fe && fe.IsLoaded)
+            {
+                try
+                {
+                    var px = fe.PointToScreen(new Point(fe.ActualWidth * 0.5, fe.ActualHeight * 0.5));
+                    centerDip = new Point(px.X / _monitor.DpiScale, px.Y / _monitor.DpiScale);
+                }
+                catch { }
+            }
+            RestoreFromDockRequested.Invoke(hwnd, centerDip);
+            return;
+        }
+
+        WindowTracker.ActivateWindow(hwnd);
     }
 
     private void ShowContextMenu(UIElement anchor, DockItemModel model)

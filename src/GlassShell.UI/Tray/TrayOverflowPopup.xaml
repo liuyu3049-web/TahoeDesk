@@ -32,7 +32,7 @@
                        Margin="4,6,4,6"
                        Visibility="Collapsed" />
 
-            <TextBlock Text="Shift + 左键可固定/取消固定到顶栏"
+            <TextBlock Text="拖拽可排序 · Shift + 左键固定到顶栏"
                        FontSize="10.5"
                        FontFamily="Microsoft YaHei UI, Segoe UI"
                        Foreground="{DynamicResource TraySubtleBrush}"

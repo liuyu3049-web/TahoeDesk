@@ -69,9 +69,11 @@ public partial class MenuBarWindow : Window
         _trayOverflowPopup.Closed += (_, _) => TrayOverflowButton.Tag = null;
         _trayOverflowPopup.TrayIconInvoked += HandleTrayIconInvoked;
         _trayOverflowPopup.TrayIconPinToggled += HandleTrayIconPinToggled;
+        _trayOverflowPopup.TrayOverflowReordered += HandleTrayOverflowReordered;
         _trayOverflowPopup.NativeTaskbarPeekRequested += ToggleNativeTaskbarPeek;
         _controlCenterPopup.Closed += (_, _) => ControlCenterButton.Tag = null;
         _controlCenterPopup.ThemeChangeRequested += theme => SettingsUpdated?.Invoke(_settings with { Theme = theme });
+        _controlCenterPopup.StageManagerToggled += enabled => SettingsUpdated?.Invoke(_settings with { StageManagerEnabled = enabled });
         ApplySettings(settings, isDarkMode);
         PositionToMonitor(monitor);
 
@@ -103,6 +105,8 @@ public partial class MenuBarWindow : Window
         _calendarPopup.ConfigureVisuals(_sampler, settings.OpacityPreset, isDarkMode);
         _trayOverflowPopup.ConfigureVisuals(_sampler, settings.OpacityPreset, isDarkMode);
         _controlCenterPopup.ConfigureVisuals(_sampler, settings, isDarkMode);
+        _controlCenterPopup.SetStageManagerState(settings.StageManagerEnabled);
+        WifiBarButton.Visibility = settings.ShowMenuBarWifiIcon ? Visibility.Visible : Visibility.Collapsed;
         UpdateTopBarInk(settings.ShowMenuBarBackground, isDarkMode);
         RebuildTrayVisuals();
     }
@@ -352,7 +356,8 @@ public partial class MenuBarWindow : Window
         var (barRecs, overflowRecs) = TrayIconRegistry.PartitionForMenuBar(
             records,
             _settings.PinnedTrayIconKeys,
-            defaultInlineCount: 4);
+            defaultInlineCount: 4,
+            overflowOrderKeys: _settings.OverflowTrayOrderKeys);
 
         var inlineTiles = new List<(TrayDisplayItem Item, Border Tile)>(barRecs.Count);
         foreach (var rec in barRecs)
@@ -527,6 +532,27 @@ public partial class MenuBarWindow : Window
         SettingsUpdated?.Invoke(_settings with { PinnedTrayIconKeys = pinned });
     }
 
+    private void HandleTrayOverflowReordered(string sourceKey, string targetKey)
+    {
+        var records = _lastTrayItems.Select(i => i.Record).ToList();
+        var (_, currentOverflow) = TrayIconRegistry.PartitionForMenuBar(
+            records,
+            _settings.PinnedTrayIconKeys,
+            defaultInlineCount: 4,
+            overflowOrderKeys: _settings.OverflowTrayOrderKeys);
+
+        var order = currentOverflow.Select(r => r.PreferenceKey).ToList();
+        int srcIdx = order.FindIndex(k => string.Equals(k, sourceKey, StringComparison.OrdinalIgnoreCase));
+        int dstIdx = order.FindIndex(k => string.Equals(k, targetKey, StringComparison.OrdinalIgnoreCase));
+        if (srcIdx < 0 || dstIdx < 0 || srcIdx == dstIdx) return;
+
+        string moved = order[srcIdx];
+        order.RemoveAt(srcIdx);
+        order.Insert(dstIdx, moved);
+
+        SettingsUpdated?.Invoke(_settings with { OverflowTrayOrderKeys = order });
+    }
+
     private void OnTrayOverflowClick(object sender, RoutedEventArgs e)
     {
         _menuPopup.IsOpen = false;
@@ -586,7 +612,7 @@ public partial class MenuBarWindow : Window
             return;
         }
 
-        _controlCenterPopup.SetWifiDrawerExpanded(true);
+        _controlCenterPopup.SwitchPage(ControlCenterPopup.SubPage.Wifi);
         _controlCenterPopup.PlacementTarget = WifiBarButton;
         _controlCenterPopup.HorizontalOffset = -230;
         _controlCenterPopup.VerticalOffset = 4;
@@ -606,7 +632,7 @@ public partial class MenuBarWindow : Window
             return;
         }
 
-        _controlCenterPopup.SetWifiDrawerExpanded(false);
+        _controlCenterPopup.SwitchPage(ControlCenterPopup.SubPage.Main);
         _controlCenterPopup.PlacementTarget = ControlCenterButton;
         _controlCenterPopup.HorizontalOffset = -270;
         _controlCenterPopup.VerticalOffset = 4;

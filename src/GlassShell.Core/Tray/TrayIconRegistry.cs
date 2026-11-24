@@ -174,7 +174,8 @@ public sealed class TrayIconRegistry
     public static (IReadOnlyList<TrayIconRecord> BarIcons, IReadOnlyList<TrayIconRecord> OverflowIcons) PartitionForMenuBar(
         IReadOnlyList<TrayIconRecord> visibleIcons,
         IReadOnlyCollection<string>? pinnedKeys,
-        int defaultInlineCount = 4)
+        int defaultInlineCount = 4,
+        IReadOnlyList<string>? overflowOrderKeys = null)
     {
         if (visibleIcons.Count == 0)
         {
@@ -210,6 +211,25 @@ public sealed class TrayIconRegistry
                 if (i < limit) bar.Add(visibleIcons[i]);
                 else overflow.Add(visibleIcons[i]);
             }
+        }
+
+        if (overflowOrderKeys is { Count: > 0 } && overflow.Count > 1)
+        {
+            var rank = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+            for (int i = 0; i < overflowOrderKeys.Count; i++)
+            {
+                rank.TryAdd(overflowOrderKeys[i], i);
+            }
+
+            overflow = overflow
+                .OrderBy(ic =>
+                {
+                    if (rank.TryGetValue(ic.PreferenceKey, out int r1)) return r1;
+                    if (rank.TryGetValue(ic.Key.StablePreferenceId, out int r2)) return r2;
+                    return int.MaxValue;
+                })
+                .ThenBy(ic => ic.OrderIndex)
+                .ToList();
         }
 
         return (bar, overflow);

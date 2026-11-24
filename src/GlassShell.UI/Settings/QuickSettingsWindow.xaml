@@ -111,10 +111,10 @@
 
                             <DockPanel Margin="0,0,0,10">
                                 <TextBlock Text="自动隐藏程序坞" Foreground="{DynamicResource SettingsFgBrush}" VerticalAlignment="Center" />
-                                <ComboBox x:Name="AutoHideCombo" Width="140" HorizontalAlignment="Right" SelectionChanged="OnSettingChanged" DropDownOpened="OnComboDropDownOpened">
-                                    <ComboBoxItem Content="关闭" Tag="Off" />
-                                    <ComboBoxItem Content="始终隐藏" Tag="Always" />
-                                    <ComboBoxItem Content="智能避让" Tag="Smart" />
+                                <ComboBox x:Name="AutoHideCombo" Width="156" HorizontalAlignment="Right" SelectionChanged="OnSettingChanged" DropDownOpened="OnComboDropDownOpened">
+                                    <ComboBoxItem Content="仅全屏时隐藏（推荐）" Tag="Off" />
+                                    <ComboBoxItem Content="窗口触底自动隐藏" Tag="Smart" />
+                                    <ComboBoxItem Content="始终自动隐藏" Tag="Always" />
                                 </ComboBox>
                             </DockPanel>
 

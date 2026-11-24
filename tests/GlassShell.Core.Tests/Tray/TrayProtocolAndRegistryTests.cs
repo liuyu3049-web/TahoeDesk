@@ -207,5 +207,13 @@ public sealed class TrayProtocolAndRegistryTests
         Assert.Equal("App1", barPinned[0].Tooltip);
         Assert.Equal("App5", barPinned[1].Tooltip);
         Assert.Equal(4, overflowPinned.Count);
+
+        // Custom overflow drag-reorder persists order cleanly
+        var (_, reordered) = TrayIconRegistry.PartitionForMenuBar(
+            icons,
+            pinnedKeys: ["tip:App1", "tip:App5"],
+            overflowOrderKeys: ["tip:App4", "tip:App2", "tip:App0", "tip:App3"]);
+        Assert.Equal("App4", reordered[0].Tooltip);
+        Assert.Equal("App2", reordered[1].Tooltip);
     }
 }

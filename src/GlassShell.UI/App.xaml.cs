@@ -102,6 +102,18 @@ public partial class App : Application
             _settings = SeedDefaultPins(_settings);
             _settingsStore.Save(_settings);
         }
+        else if (_settings.SettingsSchemaVersion < 2)
+        {
+            // One-time v2 defaults migration: keep Dock visible unless fullscreen & hide redundant MenuBar Wi-Fi icon
+            _settings = _settings with
+            {
+                SettingsSchemaVersion = 2,
+                DockAutoHide = DockAutoHideMode.Off,
+                ShowMenuBarWifiIcon = false,
+                ShowMinimizedWindowsInDock = false
+            };
+            _settingsStore.Save(_settings);
+        }
 
         var monitors = MonitorContext.GetAllMonitors();
         bool isDark = ResolveIsDarkMode(_settings);
@@ -145,6 +157,7 @@ public partial class App : Application
 
             dock.LaunchpadRequested += () => ToggleLaunchpad(monitor);
             dock.SettingsUpdated += ApplyUpdatedSettings;
+            dock.RestoreFromDockRequested += (hwnd, iconCenterDip) => HandleRestoreFromDock(monitor, hwnd, iconCenterDip);
 
             menuBar.Show();
             dock.Show();
@@ -287,6 +300,16 @@ public partial class App : Application
             string displayName = FriendlyAppNameResolver.Resolve(fg.ProcessName, fg.ClassName, fg.WindowTitle);
             _ = _menuCoordinator.OnForegroundChangedAsync(fg.Hwnd, fg.ProcessId, fg.ProcessName, displayName);
         }
+
+        // macOS Stage Manager (台前调度): keep only the active application's windows visible on stage
+        if (_settings.StageManagerEnabled
+            && fg.Hwnd != 0
+            && fg.ProcessId != 0
+            && fg.ProcessId != selfPid
+            && fg.ClassName is not ("Progman" or "WorkerW" or "Shell_TrayWnd" or "Shell_SecondaryTrayWnd"))
+        {
+            ApplyStageManagerFocus(fg.ProcessId);
+        }
     }
 
     private void ScheduleDockRefresh()
@@ -382,12 +405,71 @@ public partial class App : Application
 
     private void OnWindowMinimizing(nint hwnd)
     {
-        if (!_settings.ShowMinimizedWindowsInDock) return;
-        var snap = WindowThumbnailCapturer.CaptureThumbnail(hwnd);
-        if (snap is not null)
+        var snap = WindowThumbnailCapturer.CaptureThumbnail(hwnd, 480, 320);
+        if (snap is null) return;
+
+        _snapshotCache.Put(hwnd, snap);
+
+        // Play macOS-style scale-down-into-Dock-icon transition on the monitor hosting this window
+        var shell = FindShellForWindow(hwnd);
+        if (shell is null) return;
+
+        if (WindowDockAnimator.TryGetWindowRectDip(hwnd, shell.Monitor.DpiScale, out var winRectDip))
         {
-            _snapshotCache.Put(hwnd, snap);
+            Dispatcher.BeginInvoke(() =>
+            {
+                shell.Dock.TryGetIconScreenCenterDip(hwnd, exePath: null, out var iconCenterDip);
+                WindowDockAnimator.PlayMinimizeToDock(snap, winRectDip, iconCenterDip);
+            });
         }
+    }
+
+    private void HandleRestoreFromDock(MonitorContext monitor, nint hwnd, Point iconCenterDip)
+    {
+        if (WindowDockAnimator.TryGetWindowRectDip(hwnd, monitor.DpiScale, out var targetRectDip))
+        {
+            _snapshotCache.TryGet(hwnd, out var cachedSnap);
+            WindowDockAnimator.PlayRestoreFromDock(cachedSnap, iconCenterDip, targetRectDip);
+        }
+        WindowTracker.ActivateWindow(hwnd);
+    }
+
+    private void ApplyStageManagerFocus(uint activeProcessId)
+    {
+        if (_windowTracker is null) return;
+        _ = Task.Run(() =>
+        {
+            try
+            {
+                var windows = _windowTracker.GetTopLevelWindows();
+                foreach (var w in windows)
+                {
+                    if (w.Hwnd == 0 || w.IsMinimized || w.ProcessId == activeProcessId) continue;
+                    if (w.ClassName is "Progman" or "WorkerW" or "Shell_TrayWnd" or "Shell_SecondaryTrayWnd") continue;
+                    ShowWindowAsync(w.Hwnd, 6 /* SW_MINIMIZE */);
+                }
+            }
+            catch { }
+        });
+    }
+
+    private DisplayShellPair? FindShellForWindow(nint hwnd)
+    {
+        if (_shells.Count == 0) return null;
+        if (GetWindowRect(hwnd, out RECT rc))
+        {
+            int cx = (rc.Left + rc.Right) / 2;
+            int cy = (rc.Top + rc.Bottom) / 2;
+            foreach (var s in _shells)
+            {
+                var b = s.Monitor.Bounds;
+                if (cx >= b.Left && cx < b.Right && cy >= b.Top && cy < b.Bottom)
+                {
+                    return s;
+                }
+            }
+        }
+        return _shells.FirstOrDefault(s => s.Monitor.IsPrimary) ?? _shells[0];
     }
 
     private async Task RefreshSearchAndLaunchpadIndexAsync()
@@ -640,9 +722,20 @@ public partial class App : Application
     [StructLayout(LayoutKind.Sequential)]
     private struct POINT { public int X; public int Y; }
 
+    [StructLayout(LayoutKind.Sequential)]
+    private struct RECT { public int Left, Top, Right, Bottom; }
+
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool GetCursorPos(out POINT lpPoint);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetWindowRect(nint hWnd, out RECT lpRect);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool ShowWindowAsync(nint hWnd, int nCmdShow);
 
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]

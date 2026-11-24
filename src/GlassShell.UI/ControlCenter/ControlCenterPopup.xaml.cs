@@ -20,6 +20,13 @@ namespace GlassShell.UI.ControlCenter;
 
 public partial class ControlCenterPopup : Popup
 {
+    public enum SubPage
+    {
+        Main,
+        Wifi,
+        Bluetooth
+    }
+
     private readonly AudioControlService _audio = new();
     private readonly BrightnessControlService _brightness = new();
     private readonly RadioControlService _radio = new();
@@ -29,8 +36,9 @@ public partial class ControlCenterPopup : Popup
 
     private ThemeMode _currentTheme = ThemeMode.System;
     private RadioState _radioState = RadioState.Unavailable;
+    private bool _stageManagerEnabled;
     private bool _suppressSliderEvents;
-    private bool _wifiDrawerExpanded;
+    private SubPage _activePage = SubPage.Main;
     private int _pendingBrightness = -1;
     private int _brightnessWorkerActive;
 
@@ -50,24 +58,37 @@ public partial class ControlCenterPopup : Popup
         Closed += (_, _) =>
         {
             _dismissHook.Stop();
-            _wifiDrawerExpanded = false;
-            WifiDrawerCard.Visibility = Visibility.Collapsed;
+            SwitchPage(SubPage.Main);
         };
-    }
-
-    public void SetWifiDrawerExpanded(bool expanded)
-    {
-        _wifiDrawerExpanded = expanded;
-        WifiDrawerCard.Visibility = expanded ? Visibility.Visible : Visibility.Collapsed;
-        if (expanded && IsOpen)
-        {
-            _ = RefreshWifiListAsync();
-        }
     }
 
     public nint OwnerAnchorHwnd { get; set; }
 
     public event Action<ThemeMode>? ThemeChangeRequested;
+    public event Action<bool>? StageManagerToggled;
+
+    public void SwitchPage(SubPage page)
+    {
+        _activePage = page;
+        MainBentoView.Visibility = page == SubPage.Main ? Visibility.Visible : Visibility.Collapsed;
+        WifiSubPage.Visibility = page == SubPage.Wifi ? Visibility.Visible : Visibility.Collapsed;
+        BluetoothSubPage.Visibility = page == SubPage.Bluetooth ? Visibility.Visible : Visibility.Collapsed;
+
+        if (IsOpen)
+        {
+            if (page == SubPage.Wifi) _ = RefreshWifiListAsync();
+            else if (page == SubPage.Bluetooth) _ = RefreshBluetoothListAsync();
+        }
+    }
+
+    public void SetStageManagerState(bool enabled)
+    {
+        _stageManagerEnabled = enabled;
+        StageManagerCircle.Background = enabled
+            ? new SolidColorBrush(Color.FromRgb(0x0A, 0x84, 0xFF))
+            : new SolidColorBrush(Color.FromArgb(0x45, 0x8E, 0x8E, 0x93));
+        StageManagerStatusText.Text = enabled ? "单应用聚焦" : "已关闭";
+    }
 
     private IEnumerable<nint> CollectOpenHwnds()
     {
@@ -93,6 +114,7 @@ public partial class ControlCenterPopup : Popup
         Resources["CcCardBgBrush"] = new SolidColorBrush(isDarkMode ? Color.FromArgb(0x22, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x36, 0xFF, 0xFF, 0xFF));
         Resources["CcCardBorderBrush"] = new SolidColorBrush(isDarkMode ? Color.FromArgb(0x2C, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x40, 0x00, 0x00, 0x00));
         Resources["CcBtnBgBrush"] = new SolidColorBrush(isDarkMode ? Color.FromArgb(0x28, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x1A, 0x00, 0x00, 0x00));
+        Resources["CcHoverPillBrush"] = new SolidColorBrush(isDarkMode ? Color.FromArgb(0x26, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x18, 0x00, 0x00, 0x00));
 
         ThemeModeText.Text = settings.Theme switch
         {
@@ -104,16 +126,16 @@ public partial class ControlCenterPopup : Popup
 
     public async Task RefreshLiveStateAsync()
     {
-        // Fast synchronous Audio & Brightness reads
         var audio = _audio.GetState();
-        bool hasBrightness = _brightness.TryGetBrightness(out int brightPct);
+        bool hasBrightness = await Task.Run(() => _brightness.TryGetBrightness(out int b) ? b : -1) is int brightVal && brightVal >= 0;
+        int brightPct = hasBrightness ? brightVal : 80;
 
         _suppressSliderEvents = true;
         try
         {
             VolumeSlider.Value = audio.VolumePercent;
             VolumeValueText.Text = audio.IsMuted ? "静音" : $"{audio.VolumePercent}%";
-            MuteToggleButton.Content = audio.IsMuted || audio.VolumePercent == 0 ? "🔇" : (audio.VolumePercent < 45 ? "🔉" : "🔊");
+            MuteGlyph.Text = audio.IsMuted || audio.VolumePercent == 0 ? "🔇" : (audio.VolumePercent < 45 ? "🔉" : "🔊");
 
             BrightnessCard.Visibility = hasBrightness ? Visibility.Visible : Visibility.Collapsed;
             if (hasBrightness)
@@ -127,7 +149,6 @@ public partial class ControlCenterPopup : Popup
             _suppressSliderEvents = false;
         }
 
-        // Async WinRT Radio & Media reads
         var radioTask = _radio.GetStateAsync();
         var mediaTask = _media.GetCurrentMediaAsync();
         await Task.WhenAll(radioTask, mediaTask);
@@ -136,10 +157,26 @@ public partial class ControlCenterPopup : Popup
         ApplyRadioUi(_radioState);
         ApplyMediaUi(mediaTask.Result);
 
-        if (_wifiDrawerExpanded)
-        {
-            await RefreshWifiListAsync();
-        }
+        if (_activePage == SubPage.Wifi) await RefreshWifiListAsync();
+        else if (_activePage == SubPage.Bluetooth) await RefreshBluetoothListAsync();
+    }
+
+    private void ApplyRadioUi(RadioState state)
+    {
+        var activeBlue = new SolidColorBrush(Color.FromRgb(0x0A, 0x84, 0xFF));
+        var offGray = new SolidColorBrush(Color.FromArgb(0x45, 0x8E, 0x8E, 0x93));
+
+        WifiToggleBtn.IsEnabled = state.HasWifi;
+        WifiCircle.Background = state.HasWifi && state.WifiOn ? activeBlue : offGray;
+        WifiStatusText.Text = !state.HasWifi
+            ? "不可用"
+            : (state.WifiOn ? (string.IsNullOrWhiteSpace(state.WifiSsid) ? "已开启" : state.WifiSsid) : "已关闭");
+        WifiSubToggleText.Text = state.WifiOn ? "已开启" : "已关闭";
+
+        BtToggleBtn.IsEnabled = state.HasBluetooth;
+        BtCircle.Background = state.HasBluetooth && state.BluetoothOn ? activeBlue : offGray;
+        BtStatusText.Text = !state.HasBluetooth ? "不可用" : (state.BluetoothOn ? "已开启" : "已关闭");
+        BtSubToggleText.Text = state.BluetoothOn ? "已开启" : "已关闭";
     }
 
     private async Task RefreshWifiListAsync()
@@ -149,17 +186,18 @@ public partial class ControlCenterPopup : Popup
 
         var fgBrush = Resources["CcFgBrush"] as Brush ?? Brushes.White;
         var subBrush = Resources["CcSubtleBrush"] as Brush ?? Brushes.Gray;
-        var hoverBrush = Resources["CcBtnBgBrush"] as Brush ?? Brushes.Transparent;
+        var hoverBrush = Resources["CcHoverPillBrush"] as Brush ?? Brushes.Transparent;
 
         if (networks.Count == 0)
         {
             WifiNetworksList.Children.Add(new TextBlock
             {
-                Text = _radioState.WifiOn ? "未扫描到可用 Wi-Fi，可点右上角打开系统网络" : "Wi-Fi 已关闭",
-                FontSize = 11,
+                Text = _radioState.WifiOn ? "未扫描到附近 Wi-Fi" : "Wi-Fi 已关闭，请点击右上角开启",
+                FontSize = 12,
                 FontFamily = new FontFamily("Microsoft YaHei UI, Segoe UI"),
                 Foreground = subBrush,
-                Margin = new Thickness(4, 6, 4, 6)
+                HorizontalAlignment = HorizontalAlignment.Center,
+                Margin = new Thickness(8, 22, 8, 22)
             });
             return;
         }
@@ -170,32 +208,52 @@ public partial class ControlCenterPopup : Popup
             var status = new TextBlock
             {
                 Text = net.IsConnected ? "✓ 已连接" : (net.HasSavedProfile ? $"{net.SignalQuality}%" : "需密码"),
-                FontSize = 10.5,
+                FontSize = 11,
                 FontFamily = new FontFamily("Microsoft YaHei UI, Segoe UI"),
                 Foreground = net.IsConnected ? new SolidColorBrush(Color.FromRgb(0x34, 0xC7, 0x59)) : subBrush,
                 VerticalAlignment = VerticalAlignment.Center,
-                Margin = new Thickness(6, 0, 0, 0)
+                Margin = new Thickness(8, 0, 0, 0)
             };
             DockPanel.SetDock(status, System.Windows.Controls.Dock.Right);
             dock.Children.Add(status);
 
-            var title = new TextBlock
+            var badge = new Border
+            {
+                Width = 24,
+                Height = 24,
+                CornerRadius = new CornerRadius(12),
+                Background = net.IsConnected
+                    ? new SolidColorBrush(Color.FromRgb(0x0A, 0x84, 0xFF))
+                    : new SolidColorBrush(Color.FromArgb(0x38, 0x8E, 0x8E, 0x93)),
+                Margin = new Thickness(0, 0, 9, 0),
+                Child = new TextBlock
+                {
+                    Text = net.IsSecured ? "🔒" : "Wi",
+                    FontSize = 10,
+                    Foreground = Brushes.White,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center
+                }
+            };
+            DockPanel.SetDock(badge, System.Windows.Controls.Dock.Left);
+            dock.Children.Add(badge);
+
+            dock.Children.Add(new TextBlock
             {
                 Text = net.Ssid,
-                FontSize = 12,
+                FontSize = 12.5,
                 FontWeight = net.IsConnected ? FontWeights.SemiBold : FontWeights.Normal,
                 FontFamily = new FontFamily("Microsoft YaHei UI, Segoe UI"),
                 Foreground = fgBrush,
                 TextTrimming = TextTrimming.CharacterEllipsis,
                 VerticalAlignment = VerticalAlignment.Center
-            };
-            dock.Children.Add(title);
+            });
 
             var row = new Border
             {
-                Padding = new Thickness(8, 6, 8, 6),
+                Padding = new Thickness(8, 7, 8, 7),
                 Margin = new Thickness(0, 1, 0, 1),
-                CornerRadius = new CornerRadius(7),
+                CornerRadius = new CornerRadius(9),
                 Background = Brushes.Transparent,
                 Cursor = Cursors.Hand,
                 Child = dock
@@ -216,7 +274,6 @@ public partial class ControlCenterPopup : Popup
                 }
                 else
                 {
-                    // Brand-new password-protected Wi-Fi -> open Windows compact quick network flyout
                     IsOpen = false;
                     LaunchUri("ms-availablenetworks:");
                 }
@@ -226,20 +283,97 @@ public partial class ControlCenterPopup : Popup
         }
     }
 
-    private void ApplyRadioUi(RadioState state)
+    private async Task RefreshBluetoothListAsync()
     {
-        var activeBlue = new SolidColorBrush(Color.FromRgb(0x0A, 0x84, 0xFF));
-        var offGray = new SolidColorBrush(Color.FromArgb(0x45, 0x8E, 0x8E, 0x93));
+        var devices = await Task.Run(() => _radio.GetPairedBluetoothDevices());
+        BluetoothDevicesList.Children.Clear();
 
-        WifiToggleBtn.IsEnabled = state.HasWifi;
-        WifiCircle.Background = state.HasWifi && state.WifiOn ? activeBlue : offGray;
-        WifiStatusText.Text = !state.HasWifi
-            ? "不可用"
-            : (state.WifiOn ? (string.IsNullOrWhiteSpace(state.WifiSsid) ? "已开启" : state.WifiSsid) : "已关闭");
+        var fgBrush = Resources["CcFgBrush"] as Brush ?? Brushes.White;
+        var subBrush = Resources["CcSubtleBrush"] as Brush ?? Brushes.Gray;
+        var hoverBrush = Resources["CcHoverPillBrush"] as Brush ?? Brushes.Transparent;
 
-        BtToggleBtn.IsEnabled = state.HasBluetooth;
-        BtCircle.Background = state.HasBluetooth && state.BluetoothOn ? activeBlue : offGray;
-        BtStatusText.Text = !state.HasBluetooth ? "不可用" : (state.BluetoothOn ? "已开启" : "已关闭");
+        if (devices.Count == 0)
+        {
+            BluetoothDevicesList.Children.Add(new TextBlock
+            {
+                Text = _radioState.BluetoothOn ? "暂无已配对蓝牙设备" : "蓝牙已关闭，请点击右上角开启",
+                FontSize = 12,
+                FontFamily = new FontFamily("Microsoft YaHei UI, Segoe UI"),
+                Foreground = subBrush,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                Margin = new Thickness(8, 22, 8, 22)
+            });
+            return;
+        }
+
+        foreach (var dev in devices)
+        {
+            var dock = new DockPanel { LastChildFill = true };
+            var status = new TextBlock
+            {
+                Text = dev.IsConnected ? "已连接" : "已配对",
+                FontSize = 11,
+                FontFamily = new FontFamily("Microsoft YaHei UI, Segoe UI"),
+                Foreground = dev.IsConnected ? new SolidColorBrush(Color.FromRgb(0x34, 0xC7, 0x59)) : subBrush,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(8, 0, 0, 0)
+            };
+            DockPanel.SetDock(status, System.Windows.Controls.Dock.Right);
+            dock.Children.Add(status);
+
+            var badge = new Border
+            {
+                Width = 24,
+                Height = 24,
+                CornerRadius = new CornerRadius(12),
+                Background = dev.IsConnected
+                    ? new SolidColorBrush(Color.FromRgb(0x0A, 0x84, 0xFF))
+                    : new SolidColorBrush(Color.FromArgb(0x38, 0x8E, 0x8E, 0x93)),
+                Margin = new Thickness(0, 0, 9, 0),
+                Child = new TextBlock
+                {
+                    Text = "BT",
+                    FontSize = 9.5,
+                    FontWeight = FontWeights.SemiBold,
+                    Foreground = Brushes.White,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center
+                }
+            };
+            DockPanel.SetDock(badge, System.Windows.Controls.Dock.Left);
+            dock.Children.Add(badge);
+
+            dock.Children.Add(new TextBlock
+            {
+                Text = dev.Name,
+                FontSize = 12.5,
+                FontWeight = dev.IsConnected ? FontWeights.SemiBold : FontWeights.Normal,
+                FontFamily = new FontFamily("Microsoft YaHei UI, Segoe UI"),
+                Foreground = fgBrush,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                VerticalAlignment = VerticalAlignment.Center
+            });
+
+            var row = new Border
+            {
+                Padding = new Thickness(8, 7, 8, 7),
+                Margin = new Thickness(0, 1, 0, 1),
+                CornerRadius = new CornerRadius(9),
+                Background = Brushes.Transparent,
+                Cursor = Cursors.Hand,
+                Child = dock
+            };
+            row.MouseEnter += (_, _) => row.Background = hoverBrush;
+            row.MouseLeave += (_, _) => row.Background = Brushes.Transparent;
+            row.MouseLeftButtonUp += (_, e) =>
+            {
+                e.Handled = true;
+                IsOpen = false;
+                LaunchUri("ms-settings:bluetooth");
+            };
+
+            BluetoothDevicesList.Children.Add(row);
+        }
     }
 
     private void ApplyMediaUi(MediaSessionInfo media)
@@ -248,7 +382,7 @@ public partial class ControlCenterPopup : Popup
         {
             MediaTitleText.Text = "未在播放";
             MediaArtistText.Text = "打开音乐或视频即可在此控制";
-            PlayPauseBtn.Content = "▶";
+            PlayPauseGlyph.Text = "▶";
             MediaArtworkImage.Source = null;
             MediaFallbackGlyph.Visibility = Visibility.Visible;
             return;
@@ -256,7 +390,7 @@ public partial class ControlCenterPopup : Popup
 
         MediaTitleText.Text = media.Title;
         MediaArtistText.Text = media.FormattedSubtitle;
-        PlayPauseBtn.Content = media.IsPlaying ? "⏸" : "▶";
+        PlayPauseGlyph.Text = media.IsPlaying ? "⏸" : "▶";
 
         if (media.ThumbnailBytes is { Length: > 0 })
         {
@@ -280,27 +414,24 @@ public partial class ControlCenterPopup : Popup
         MediaFallbackGlyph.Visibility = Visibility.Visible;
     }
 
+    private void OnBackToMainClick(object sender, RoutedEventArgs e) => SwitchPage(SubPage.Main);
+    private void OnOpenWifiSubPage(object sender, RoutedEventArgs e) => SwitchPage(SubPage.Wifi);
+    private void OnOpenBluetoothSubPage(object sender, RoutedEventArgs e) => SwitchPage(SubPage.Bluetooth);
+
     private async void OnWifiToggleClick(object sender, RoutedEventArgs e)
     {
         if (!_radioState.HasWifi) return;
-        bool next = !_radioState.WifiOn;
-        await _radio.SetWifiEnabledAsync(next);
-        await Task.Delay(250);
+        await _radio.SetWifiEnabledAsync(!_radioState.WifiOn);
+        await Task.Delay(260);
         await RefreshLiveStateAsync();
     }
 
     private async void OnBluetoothToggleClick(object sender, RoutedEventArgs e)
     {
         if (!_radioState.HasBluetooth) return;
-        bool next = !_radioState.BluetoothOn;
-        await _radio.SetBluetoothEnabledAsync(next);
-        await Task.Delay(250);
+        await _radio.SetBluetoothEnabledAsync(!_radioState.BluetoothOn);
+        await Task.Delay(260);
         await RefreshLiveStateAsync();
-    }
-
-    private void OnOpenWifiSettings(object sender, RoutedEventArgs e)
-    {
-        SetWifiDrawerExpanded(!_wifiDrawerExpanded);
     }
 
     private void OnOpenAvailableNetworksFlyout(object sender, RoutedEventArgs e)
@@ -337,6 +468,18 @@ public partial class ControlCenterPopup : Popup
         };
         _currentTheme = next;
         ThemeChangeRequested?.Invoke(next);
+    }
+
+    private void OnStageManagerClick(object sender, RoutedEventArgs e)
+    {
+        SetStageManagerState(!_stageManagerEnabled);
+        StageManagerToggled?.Invoke(_stageManagerEnabled);
+    }
+
+    private void OnMissionControlClick(object sender, RoutedEventArgs e)
+    {
+        IsOpen = false;
+        _dispatcher.Dispatch(0, new MenuInvokeAction(MenuActionKind.KeyboardShortcut, Shortcut: "Win+Tab"));
     }
 
     private void OnBrightnessChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
@@ -380,7 +523,7 @@ public partial class ControlCenterPopup : Popup
         if (_suppressSliderEvents) return;
         int pct = (int)Math.Round(e.NewValue);
         VolumeValueText.Text = $"{pct}%";
-        MuteToggleButton.Content = pct == 0 ? "🔇" : (pct < 45 ? "🔉" : "🔊");
+        MuteGlyph.Text = pct == 0 ? "🔇" : (pct < 45 ? "🔉" : "🔊");
         _audio.SetVolumePercent(pct);
     }
 
@@ -389,7 +532,7 @@ public partial class ControlCenterPopup : Popup
         _audio.ToggleMute();
         var state = _audio.GetState();
         VolumeValueText.Text = state.IsMuted ? "静音" : $"{state.VolumePercent}%";
-        MuteToggleButton.Content = state.IsMuted || state.VolumePercent == 0 ? "🔇" : (state.VolumePercent < 45 ? "🔉" : "🔊");
+        MuteGlyph.Text = state.IsMuted || state.VolumePercent == 0 ? "🔇" : (state.VolumePercent < 45 ? "🔉" : "🔊");
     }
 
     private async void OnPrevTrackClick(object sender, RoutedEventArgs e)

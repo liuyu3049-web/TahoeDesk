@@ -171,6 +171,58 @@ public sealed class RadioControlService
         }
     }
 
+    public IReadOnlyList<BluetoothDeviceInfo> GetPairedBluetoothDevices()
+    {
+        var list = new List<BluetoothDeviceInfo>();
+        try
+        {
+            var search = new BLUETOOTH_DEVICE_SEARCH_PARAMS
+            {
+                dwSize = (uint)Marshal.SizeOf<BLUETOOTH_DEVICE_SEARCH_PARAMS>(),
+                fReturnAuthenticated = true,
+                fReturnRemembered = true,
+                fReturnUnknown = false,
+                fReturnConnected = true,
+                fIssueInquiry = false,
+                cTimeoutMultiplier = 1,
+                hRadio = 0
+            };
+
+            var info = new BLUETOOTH_DEVICE_INFO
+            {
+                dwSize = (uint)Marshal.SizeOf<BLUETOOTH_DEVICE_INFO>()
+            };
+
+            nint findHandle = BluetoothFindFirstDevice(ref search, ref info);
+            if (findHandle == 0) return list;
+
+            try
+            {
+                do
+                {
+                    string name = (info.szName ?? string.Empty).Trim('\0', ' ');
+                    if (!string.IsNullOrEmpty(name))
+                    {
+                        list.Add(new BluetoothDeviceInfo(name, info.Address, info.fConnected, info.fRemembered));
+                    }
+                    info.dwSize = (uint)Marshal.SizeOf<BLUETOOTH_DEVICE_INFO>();
+                }
+                while (BluetoothFindNextDevice(findHandle, ref info));
+            }
+            finally
+            {
+                BluetoothFindDeviceClose(findHandle);
+            }
+        }
+        catch { }
+
+        return list
+            .OrderByDescending(d => d.IsConnected)
+            .ThenBy(d => d.Name, StringComparer.CurrentCultureIgnoreCase)
+            .Take(12)
+            .ToList();
+    }
+
     private static Windows.Devices.Radios.RadioState RadioStateKindToBool(Windows.Devices.Radios.RadioState _)
         => Windows.Devices.Radios.RadioState.On;
 
@@ -279,4 +331,49 @@ public sealed class RadioControlService
 
     [DllImport("wlanapi.dll")]
     private static extern void WlanFreeMemory(nint pMemory);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct SYSTEMTIME
+    {
+        public ushort Year, Month, DayOfWeek, Day, Hour, Minute, Second, Milliseconds;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct BLUETOOTH_DEVICE_SEARCH_PARAMS
+    {
+        public uint dwSize;
+        [MarshalAs(UnmanagedType.Bool)] public bool fReturnAuthenticated;
+        [MarshalAs(UnmanagedType.Bool)] public bool fReturnRemembered;
+        [MarshalAs(UnmanagedType.Bool)] public bool fReturnUnknown;
+        [MarshalAs(UnmanagedType.Bool)] public bool fReturnConnected;
+        [MarshalAs(UnmanagedType.Bool)] public bool fIssueInquiry;
+        public byte cTimeoutMultiplier;
+        public nint hRadio;
+    }
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct BLUETOOTH_DEVICE_INFO
+    {
+        public uint dwSize;
+        public ulong Address;
+        public uint ulClassofDevice;
+        [MarshalAs(UnmanagedType.Bool)] public bool fConnected;
+        [MarshalAs(UnmanagedType.Bool)] public bool fRemembered;
+        [MarshalAs(UnmanagedType.Bool)] public bool fAuthenticated;
+        public SYSTEMTIME stLastSeen;
+        public SYSTEMTIME stLastUsed;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 248)]
+        public string szName;
+    }
+
+    [DllImport("bthprops.cpl", SetLastError = true)]
+    private static extern nint BluetoothFindFirstDevice(ref BLUETOOTH_DEVICE_SEARCH_PARAMS pbtsp, ref BLUETOOTH_DEVICE_INFO pbtdi);
+
+    [DllImport("bthprops.cpl", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool BluetoothFindNextDevice(nint hFind, ref BLUETOOTH_DEVICE_INFO pbtdi);
+
+    [DllImport("bthprops.cpl", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool BluetoothFindDeviceClose(nint hFind);
 }
