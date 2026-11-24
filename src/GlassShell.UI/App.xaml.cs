@@ -20,7 +20,6 @@ using GlassShell.UI.Launchpad;
 using GlassShell.UI.MenuBar;
 using GlassShell.UI.Settings;
 using GlassShell.UI.Spotlight;
-using GlassShell.UI.StageManager;
 using GlassShell.UI.Tray;
 using Microsoft.Win32;
 
@@ -44,15 +43,10 @@ public partial class App : Application
     private GlobalHotkeyManager? _hotkeyManager;
     private RecycleBinService? _recycleBinService;
     private readonly WindowSnapshotCache<BitmapSource> _snapshotCache = new(16);
-    private readonly System.Collections.Concurrent.ConcurrentDictionary<nint, ScreenRect> _lastWindowBounds = new();
     private readonly List<DisplayShellPair> _shells = [];
     private LaunchpadWindow? _launchpadWindow;
     private SpotlightWindow? _spotlightWindow;
-    private StageManagerWindow? _stageManagerWindow;
     private QuickSettingsWindow? _settingsWindow;
-    private int _originalMinAnimate = 1;
-    private bool _suppressedMinAnimate;
-    private uint _lastActiveProcessId;
     private IReadOnlyList<InstalledAppEntry> _cachedApps = [];
     private IReadOnlyList<IndexedFileEntry> _cachedFiles = [];
     private DispatcherTimer? _periodicRefreshTimer;
@@ -121,7 +115,7 @@ public partial class App : Application
             _settingsStore.Save(_settings);
         }
 
-        SuppressSystemMinimizeAnimation();
+        EnsureNativeMinimizeAnimationEnabled();
 
         var monitors = MonitorContext.GetAllMonitors();
         bool isDark = ResolveIsDarkMode(_settings);
@@ -136,16 +130,9 @@ public partial class App : Application
         _hotkeyManager = new GlobalHotkeyManager();
 
         _launchpadWindow = new LaunchpadWindow(_backdropSampler);
+        _launchpadWindow.RescanRequested += () => _ = RefreshSearchAndLaunchpadIndexAsync();
         _spotlightWindow = new SpotlightWindow(_backdropSampler, _settings, isDark);
         _spotlightWindow.SystemCommandRequested += HandleSpotlightSystemCommand;
-
-        var primaryMon = monitors.FirstOrDefault(m => m.IsPrimary) ?? monitors[0];
-        _stageManagerWindow = new StageManagerWindow(primaryMon, isDark);
-        _stageManagerWindow.AppGroupSelected += OnStageManagerGroupSelected;
-        if (_settings.StageManagerEnabled)
-        {
-            _stageManagerWindow.Show();
-        }
 
         var extractors = new IMenuExtractor[]
         {
@@ -174,7 +161,6 @@ public partial class App : Application
 
             dock.LaunchpadRequested += () => ToggleLaunchpad(monitor);
             dock.SettingsUpdated += ApplyUpdatedSettings;
-            dock.RestoreFromDockRequested += (hwnd, iconCenterDip) => HandleRestoreFromDock(monitor, hwnd, iconCenterDip);
 
             menuBar.Show();
             dock.Show();
@@ -194,10 +180,6 @@ public partial class App : Application
             {
                 s.MenuBar.Visibility = vis;
                 s.Dock.Visibility = vis;
-            }
-            if (_stageManagerWindow is not null)
-            {
-                _stageManagerWindow.Visibility = visible && _settings.StageManagerEnabled ? Visibility.Visible : Visibility.Collapsed;
             }
         });
         _taskbarController.DockYieldForTrayChanged += yield => Dispatcher.InvokeAsync(() =>
@@ -338,24 +320,6 @@ public partial class App : Application
         {
             _winKeyHook.IsFullscreenActive = primaryFullscreen;
         }
-
-        if (_stageManagerWindow is not null)
-        {
-            if (primaryFullscreen || !_settings.StageManagerEnabled)
-            {
-                if (_stageManagerWindow.IsVisible) _stageManagerWindow.Visibility = Visibility.Collapsed;
-            }
-            else
-            {
-                if (!_stageManagerWindow.IsVisible) _stageManagerWindow.Visibility = Visibility.Visible;
-                var primary = _shells.FirstOrDefault(x => x.Monitor.IsPrimary) ?? _shells[0];
-                bool fgOverlapsLeft = fg.Hwnd != 0 && !fg.IsMinimized
-                    && fg.ClassName is not ("Progman" or "WorkerW" or "Shell_TrayWnd" or "Shell_SecondaryTrayWnd")
-                    && fg.Bounds.Left < primary.Monitor.Bounds.Left + (int)(185 * primary.Monitor.DpiScale)
-                    && fg.Bounds.Right > primary.Monitor.Bounds.Left;
-                _stageManagerWindow.SetLeftEdgeOverlapped(fgOverlapsLeft || fg.IsMaximized);
-            }
-        }
     }
 
     private void OnForegroundChanged(ForegroundWindowInfo fg)
@@ -387,34 +351,10 @@ public partial class App : Application
 
         EvaluatePerMonitorVisibility(fg);
 
-        // Record live pre-minimize window rect & fresh snapshot so Dock Genie animation ALWAYS works cleanly
-        if (fg.Hwnd != 0 && !fg.IsMinimized && !fg.IsCloaked && fg.Bounds.Width > 80 && fg.Bounds.Height > 60
-            && fg.ClassName is not ("Progman" or "WorkerW" or "Shell_TrayWnd" or "Shell_SecondaryTrayWnd"))
-        {
-            _lastWindowBounds[fg.Hwnd] = fg.Bounds;
-            _lastActiveProcessId = fg.ProcessId;
-            nint captureTarget = fg.Hwnd;
-            _ = Task.Run(() =>
-            {
-                var snap = WindowThumbnailCapturer.CaptureThumbnail(captureTarget, 420, 280);
-                if (snap is not null) _snapshotCache.Put(captureTarget, snap);
-            });
-        }
-
         if (_menuCoordinator is not null && fg.Hwnd != 0)
         {
             string displayName = FriendlyAppNameResolver.Resolve(fg.ProcessName, fg.ClassName, fg.WindowTitle);
             _ = _menuCoordinator.OnForegroundChangedAsync(fg.Hwnd, fg.ProcessId, fg.ProcessName, displayName);
-        }
-
-        // macOS Stage Manager (台前调度): keep only the active application's windows visible on stage & update left strip
-        if (_settings.StageManagerEnabled
-            && fg.Hwnd != 0
-            && fg.ProcessId != 0
-            && fg.ProcessId != selfPid
-            && fg.ClassName is not ("Progman" or "WorkerW" or "Shell_TrayWnd" or "Shell_SecondaryTrayWnd"))
-        {
-            ApplyStageManagerFocus(fg.ProcessId);
         }
     }
 
@@ -476,24 +416,12 @@ public partial class App : Application
                 }
 
                 var rb = _recycleBinService.Query();
-                var dockItems = DockModelCoordinator.BuildDockItems(settingsSnapshot, windows, recentCopy, rb, stableCopy);
-
-                List<StageGroupItem>? stageGroups = null;
-                if (settingsSnapshot.StageManagerEnabled)
-                {
-                    stageGroups = BuildStageGroups(windows, _lastActiveProcessId);
-                }
-
-                return (dockItems, stageGroups);
+                return DockModelCoordinator.BuildDockItems(settingsSnapshot, windows, recentCopy, rb, stableCopy);
             });
 
             await Dispatcher.InvokeAsync(() =>
             {
-                foreach (var s in _shells) s.Dock.UpdateItems(items.dockItems);
-                if (items.stageGroups is not null && _stageManagerWindow is not null)
-                {
-                    _stageManagerWindow.UpdateGroups(items.stageGroups);
-                }
+                foreach (var s in _shells) s.Dock.UpdateItems(items);
             });
         }
         catch { }
@@ -505,7 +433,6 @@ public partial class App : Application
 
     private void ApplyUpdatedSettings(GlassSettings updated)
     {
-        bool stageToggled = _settings.StageManagerEnabled != updated.StageManagerEnabled;
         _settings = updated;
         _settingsStore?.Save(updated);
         bool isDark = ResolveIsDarkMode(updated);
@@ -514,22 +441,6 @@ public partial class App : Application
             _winKeyHook.Enabled = updated.InterceptWinKeyForLaunchpad;
         }
         _spotlightWindow?.ApplySettings(updated, isDark);
-        _stageManagerWindow?.ApplyTheme(isDark);
-        if (_stageManagerWindow is not null && stageToggled)
-        {
-            if (updated.StageManagerEnabled)
-            {
-                _stageManagerWindow.Show();
-                if (_lastActiveProcessId != 0)
-                {
-                    ApplyStageManagerFocus(_lastActiveProcessId);
-                }
-            }
-            else
-            {
-                _stageManagerWindow.Hide();
-            }
-        }
         foreach (var s in _shells)
         {
             s.MenuBar.ApplySettings(updated, isDark);
@@ -540,199 +451,24 @@ public partial class App : Application
 
     private void OnWindowMinimizing(nint hwnd)
     {
-        // Try live capture first; if Windows already marked HWND iconic during async hook delivery, reuse cached snapshot!
-        var snap = WindowThumbnailCapturer.CaptureThumbnail(hwnd, 420, 280);
+        if (!_settings.ShowMinimizedWindowsInDock) return;
+        var snap = WindowThumbnailCapturer.CaptureThumbnail(hwnd);
         if (snap is not null)
         {
             _snapshotCache.Put(hwnd, snap);
         }
-        else
-        {
-            _snapshotCache.TryGet(hwnd, out snap);
-        }
-
-        // Resolve pre-minimize bounds from our live bounds cache first (never (-32000,-32000)!), then GetWindowPlacement
-        ScreenRect? cachedPx = _lastWindowBounds.TryGetValue(hwnd, out var prevRect) ? prevRect : null;
-        var shell = FindShellForWindow(hwnd, cachedPx);
-        if (shell is null) return;
-
-        Rect winRectDip;
-        if (cachedPx is { Width: > 60, Height: > 48 } r)
-        {
-            double dpi = shell.Monitor.DpiScale;
-            winRectDip = new Rect(r.Left / dpi, r.Top / dpi, r.Width / dpi, r.Height / dpi);
-        }
-        else if (!WindowDockAnimator.TryGetWindowRectDip(hwnd, shell.Monitor.DpiScale, out winRectDip))
-        {
-            return;
-        }
-
-        Dispatcher.BeginInvoke(() =>
-        {
-            shell.Dock.TryGetIconScreenCenterDip(hwnd, exePath: null, out var iconCenterDip);
-            WindowDockAnimator.PlayMinimizeToDock(snap!, winRectDip, iconCenterDip);
-        });
     }
 
-    private void HandleRestoreFromDock(MonitorContext monitor, nint hwnd, Point iconCenterDip)
-    {
-        Rect targetRectDip;
-        if (_lastWindowBounds.TryGetValue(hwnd, out var cached) && cached.Width > 60 && cached.Height > 48)
-        {
-            targetRectDip = new Rect(cached.Left / monitor.DpiScale, cached.Top / monitor.DpiScale, cached.Width / monitor.DpiScale, cached.Height / monitor.DpiScale);
-        }
-        else if (!WindowDockAnimator.TryGetWindowRectDip(hwnd, monitor.DpiScale, out targetRectDip))
-        {
-            targetRectDip = new Rect((monitor.Bounds.Left / monitor.DpiScale) + 120, (monitor.Bounds.Top / monitor.DpiScale) + 80, monitor.WidthDip * 0.7, monitor.HeightDip * 0.7);
-        }
-
-        _snapshotCache.TryGet(hwnd, out var cachedSnap);
-        WindowDockAnimator.PlayRestoreFromDock(cachedSnap, iconCenterDip, targetRectDip);
-        WindowTracker.ActivateWindow(hwnd);
-    }
-
-    private void OnStageManagerGroupSelected(nint hwnd, uint processId)
-    {
-        _lastActiveProcessId = processId;
-        WindowTracker.ActivateWindow(hwnd);
-        NudgeWindowIntoStageCenter(hwnd);
-        ApplyStageManagerFocus(processId);
-    }
-
-    private void NudgeWindowIntoStageCenter(nint hwnd)
-    {
-        if (hwnd == 0 || _shells.Count == 0) return;
-        try
-        {
-            var primary = _shells.FirstOrDefault(s => s.Monitor.IsPrimary) ?? _shells[0];
-            if (GetWindowRect(hwnd, out RECT rc) && rc.Left > -10000)
-            {
-                int w = rc.Right - rc.Left;
-                int h = rc.Bottom - rc.Top;
-                int leftMarginPx = (int)(194 * primary.Monitor.DpiScale);
-                int availW = primary.Monitor.Bounds.Width - leftMarginPx - (int)(24 * primary.Monitor.DpiScale);
-
-                // Only gently nudge floating windows that overlap the left strip and fit inside the center-right stage
-                if (w < availW && rc.Left < primary.Monitor.Bounds.Left + leftMarginPx)
-                {
-                    int targetX = primary.Monitor.Bounds.Left + leftMarginPx + Math.Max(0, (availW - w) / 2);
-                    SetWindowPos(hwnd, 0, targetX, rc.Top, 0, 0, 0x0001 | 0x0004 | 0x0010 /* SWP_NOSIZE|SWP_NOZORDER|SWP_NOACTIVATE */);
-                }
-            }
-        }
-        catch { }
-    }
-
-    private List<StageGroupItem> BuildStageGroups(IReadOnlyList<WindowInfo> windows, uint activeProcessId)
-    {
-        return windows
-            .Where(w => w.Hwnd != 0
-                && w.ProcessId != activeProcessId
-                && w.ClassName is not ("Progman" or "WorkerW" or "Shell_TrayWnd" or "Shell_SecondaryTrayWnd"))
-            .GroupBy(w => w.ProcessId)
-            .Take(5)
-            .Select(g =>
-            {
-                var rep = g.First();
-                _snapshotCache.TryGet(rep.Hwnd, out var snap);
-                return new StageGroupItem(
-                    rep.Hwnd,
-                    rep.ProcessId,
-                    rep.AppDisplayName,
-                    rep.Title,
-                    rep.ExecutablePath,
-                    g.Count(),
-                    snap);
-            })
-            .ToList();
-    }
-
-    private void ApplyStageManagerFocus(uint activeProcessId)
-    {
-        if (_windowTracker is null) return;
-        _ = Task.Run(() =>
-        {
-            try
-            {
-                var windows = _windowTracker.GetTopLevelWindows();
-                foreach (var w in windows)
-                {
-                    if (w.Hwnd == 0 || w.IsMinimized || w.ProcessId == activeProcessId) continue;
-                    if (w.ClassName is "Progman" or "WorkerW" or "Shell_TrayWnd" or "Shell_SecondaryTrayWnd") continue;
-
-                    var snap = WindowThumbnailCapturer.CaptureThumbnail(w.Hwnd, 320, 200);
-                    if (snap is not null) _snapshotCache.Put(w.Hwnd, snap);
-                    ShowWindowAsync(w.Hwnd, 6 /* SW_MINIMIZE */);
-                }
-
-                var groups = BuildStageGroups(windows, activeProcessId);
-                Dispatcher.BeginInvoke(() => _stageManagerWindow?.UpdateGroups(groups));
-            }
-            catch { }
-        });
-    }
-
-    private DisplayShellPair? FindShellForWindow(nint hwnd, ScreenRect? cachedRect = null)
-    {
-        if (_shells.Count == 0) return null;
-        int cx = 0, cy = 0;
-        bool hasPt = false;
-        if (cachedRect is { Width: > 0, Height: > 0 } r)
-        {
-            cx = (r.Left + r.Right) / 2;
-            cy = (r.Top + r.Bottom) / 2;
-            hasPt = true;
-        }
-        else if (GetWindowRect(hwnd, out RECT rc) && rc.Left > -10000)
-        {
-            cx = (rc.Left + rc.Right) / 2;
-            cy = (rc.Top + rc.Bottom) / 2;
-            hasPt = true;
-        }
-
-        if (hasPt)
-        {
-            foreach (var s in _shells)
-            {
-                var b = s.Monitor.Bounds;
-                if (cx >= b.Left && cx < b.Right && cy >= b.Top && cy < b.Bottom)
-                {
-                    return s;
-                }
-            }
-        }
-        return _shells.FirstOrDefault(s => s.Monitor.IsPrimary) ?? _shells[0];
-    }
-
-    private void SuppressSystemMinimizeAnimation()
+    private static void EnsureNativeMinimizeAnimationEnabled()
     {
         try
         {
             var info = new ANIMATIONINFO { cbSize = (uint)Marshal.SizeOf<ANIMATIONINFO>() };
-            if (SystemParametersInfoW(0x0048 /* SPI_GETANIMATION */, info.cbSize, ref info, 0))
+            if (SystemParametersInfoW(0x0048 /* SPI_GETANIMATION */, info.cbSize, ref info, 0) && info.iMinAnimate == 0)
             {
-                _originalMinAnimate = info.iMinAnimate;
-                if (info.iMinAnimate != 0)
-                {
-                    info.iMinAnimate = 0;
-                    if (SystemParametersInfoW(0x0049 /* SPI_SETANIMATION */, info.cbSize, ref info, 0x0002 /* SPIF_SENDCHANGE */))
-                    {
-                        _suppressedMinAnimate = true;
-                    }
-                }
+                info.iMinAnimate = 1;
+                SystemParametersInfoW(0x0049 /* SPI_SETANIMATION */, info.cbSize, ref info, 0x0002 /* SPIF_SENDCHANGE */);
             }
-        }
-        catch { }
-    }
-
-    private void RestoreSystemMinimizeAnimation()
-    {
-        if (!_suppressedMinAnimate) return;
-        _suppressedMinAnimate = false;
-        try
-        {
-            var info = new ANIMATIONINFO { cbSize = (uint)Marshal.SizeOf<ANIMATIONINFO>(), iMinAnimate = _originalMinAnimate };
-            SystemParametersInfoW(0x0049 /* SPI_SETANIMATION */, info.cbSize, ref info, 0x0002 /* SPIF_SENDCHANGE */);
         }
         catch { }
     }
@@ -971,7 +707,6 @@ public partial class App : Application
         // Restore native taskbar visibility FIRST, then destroy our Shell_TrayWnd proxy & broadcast TaskbarCreated
         // so all running tray apps immediately re-register onto Explorer's restored taskbar.
         try { _taskbarController?.Release(); } catch { }
-        try { RestoreSystemMinimizeAnimation(); } catch { }
         try { _trayProxyHost?.Dispose(); } catch { }
         try { _backdropSampler?.Dispose(); } catch { }
         try { _cleanExitEvent?.Set(); } catch { }
@@ -989,9 +724,6 @@ public partial class App : Application
     private struct POINT { public int X; public int Y; }
 
     [StructLayout(LayoutKind.Sequential)]
-    private struct RECT { public int Left, Top, Right, Bottom; }
-
-    [StructLayout(LayoutKind.Sequential)]
     private struct ANIMATIONINFO { public uint cbSize; public int iMinAnimate; }
 
     [DllImport("user32.dll")]
@@ -1001,18 +733,6 @@ public partial class App : Application
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool GetCursorPos(out POINT lpPoint);
-
-    [DllImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool GetWindowRect(nint hWnd, out RECT lpRect);
-
-    [DllImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool ShowWindowAsync(nint hWnd, int nCmdShow);
-
-    [DllImport("user32.dll")]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    private static extern bool SetWindowPos(nint hWnd, nint hWndInsertAfter, int x, int y, int cx, int cy, uint uFlags);
 
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]

@@ -154,4 +154,55 @@ public sealed class LaunchpadLayoutTests
         Assert.Equal("Beta", sorted[2].Title);
         Assert.False(sortMgr.Reorder("app:z", "app:a")); // Cannot drag locked item
     }
+
+    [Fact]
+    public void ManualApps_SurviveRescanAndPersistence_AndReorderMaterializesSortedOrder()
+    {
+        string file = Path.Combine(Path.GetTempPath(), $"GlassShell_LaunchpadManual_{Guid.NewGuid():N}.json");
+        try
+        {
+            var mgr = new LaunchpadLayoutManager();
+            mgr.SyncWithInstalledApps(
+            [
+                new("app:c", "Charlie", @"C:\C.exe", null, false, "c"),
+                new("app:a", "Alpha", @"C:\A.exe", null, false, "a"),
+                new("app:b", "Bravo", @"C:\B.exe", null, false, "b")
+            ]);
+
+            var manual = new InstalledAppEntry("manual:d:\\tools\\mytool.exe", "MyTool", @"D:\Tools\MyTool.exe", @"D:\Tools\MyTool.exe", false, "mt");
+            Assert.True(mgr.AddManualApp(manual));
+            Assert.True(mgr.IsManualApp(manual.Id));
+
+            // Rescan without manual app in scanned list MUST keep manual app intact
+            mgr.SyncWithInstalledApps(
+            [
+                new("app:c", "Charlie", @"C:\C.exe", null, false, "c"),
+                new("app:a", "Alpha", @"C:\A.exe", null, false, "a"),
+                new("app:b", "Bravo", @"C:\B.exe", null, false, "b")
+            ]);
+            Assert.Contains(mgr.Entries, e => e.Id == manual.Id);
+
+            // Reordering while in NameAsc materializes sorted order seamlessly and switches to Custom
+            mgr.SortMode = LaunchpadSortMode.NameAsc;
+            Assert.True(mgr.Reorder(manual.Id, "app:a"));
+            Assert.Equal(LaunchpadSortMode.Custom, mgr.SortMode);
+            Assert.Equal(manual.Id, mgr.Entries[0].Id);
+            Assert.Equal("app:a", mgr.Entries[1].Id);
+
+            // Persist and reload preserves manual apps and order
+            mgr.Save(file);
+            var reloaded = new LaunchpadLayoutManager();
+            reloaded.Load(file);
+            Assert.True(reloaded.IsManualApp(manual.Id));
+            Assert.Equal(manual.Id, reloaded.Entries[0].Id);
+
+            Assert.True(reloaded.RemoveManualApp(manual.Id));
+            Assert.False(reloaded.IsManualApp(manual.Id));
+            Assert.DoesNotContain(reloaded.Entries, e => e.Id == manual.Id);
+        }
+        finally
+        {
+            if (File.Exists(file)) File.Delete(file);
+        }
+    }
 }

@@ -9,7 +9,7 @@ namespace GlassShell.Core.Launchpad;
 
 /// <summary>
 /// Manages Launchpad's 7x5 paginated app grid, smart primary-app filtering, sorting rules,
-/// individual item locking, direct drag-to-reorder auto-flow, folder grouping, and JSON persistence.
+/// individual item locking, manual app additions, direct drag-to-reorder auto-flow, folder grouping, and JSON persistence.
 /// </summary>
 public sealed class LaunchpadLayoutManager
 {
@@ -19,19 +19,17 @@ public sealed class LaunchpadLayoutManager
 
     private static readonly string[] AuxiliaryKeywords =
     [
-        "发行说明", "更新日志", "知识融合", "配置工具", "配置", "许可", "许可证", "授权", "激活", "诊断",
-        "修复", "更新程序", "升级工具", "安装向导", "命令行", "开发者命令", "说明文档", "使用手册", "帮助",
-        "驱动程序", "卸载", "指南", "教程", "向导", "管理工具", "控制台", "监控", "日志", "示例", "反馈", "支持",
-        "release notes", "changelog", "license", "licensing", "config", "configure", "updater", "auto update",
-        "installer", "setup", "repair", "diagnostic", "native tools", "developer", "command prompt",
-        "powershell for", "profiler", "benchmark", "maintenance", "migration", "uninstall", "readme",
-        "read me", "manual", "documentation", "tutorial", "guide", "support", "feedback", "wizard",
-        "helper", "agent", "daemon", "sdk", "toolkit", "utility", "ice"
+        "发行说明", "更新日志", "知识融合", "配置工具", "许可", "许可证", "授权工具", "激活工具", "诊断工具",
+        "修复工具", "更新程序", "升级工具", "安装向导", "开发者命令", "说明文档", "使用手册", "帮助文档",
+        "卸载", "管理工具", "release notes", "changelog", "license manager", "licensing",
+        "auto update", "updater", "native tools", "developer command", "developer powershell",
+        "command prompt for", "uninstall", "readme", "read me", "documentation", "ice"
     ];
 
     private sealed class PersistedState
     {
         public List<LaunchpadEntry> Entries { get; set; } = [];
+        public List<InstalledAppEntry> ManualApps { get; set; } = [];
         public List<string> HiddenAppIds { get; set; } = [];
         public List<string> ForceShownAppIds { get; set; } = [];
         public List<string> LockedAppIds { get; set; } = [];
@@ -40,11 +38,13 @@ public sealed class LaunchpadLayoutManager
 
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
     private readonly List<LaunchpadEntry> _entries = [];
+    private readonly List<InstalledAppEntry> _manualApps = [];
     private readonly HashSet<string> _hiddenIds = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _forceShownIds = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _lockedIds = new(StringComparer.OrdinalIgnoreCase);
 
     public IReadOnlyList<LaunchpadEntry> Entries => _entries;
+    public IReadOnlyList<InstalledAppEntry> ManualApps => _manualApps;
     public IReadOnlyCollection<string> HiddenAppIds => _hiddenIds;
     public IReadOnlyCollection<string> LockedAppIds => _lockedIds;
     public LaunchpadSortMode SortMode { get; set; } = LaunchpadSortMode.Custom;
@@ -75,6 +75,54 @@ public sealed class LaunchpadLayoutManager
     }
 
     public bool IsLocked(string entryId) => !string.IsNullOrWhiteSpace(entryId) && _lockedIds.Contains(entryId);
+
+    public bool IsManualApp(string entryId)
+        => !string.IsNullOrWhiteSpace(entryId) && _manualApps.Any(m => string.Equals(m.Id, entryId, StringComparison.OrdinalIgnoreCase));
+
+    public bool AddManualApp(InstalledAppEntry app)
+    {
+        if (string.IsNullOrWhiteSpace(app.Id) || string.IsNullOrWhiteSpace(app.Name)) return false;
+
+        _manualApps.RemoveAll(m => string.Equals(m.Id, app.Id, StringComparison.OrdinalIgnoreCase));
+        _manualApps.Add(app);
+        _hiddenIds.Remove(app.Id);
+        _forceShownIds.Add(app.Id);
+
+        int existingIdx = _entries.FindIndex(e => string.Equals(e.Id, app.Id, StringComparison.OrdinalIgnoreCase));
+        var entry = ToEntry(app);
+        if (existingIdx >= 0)
+        {
+            _entries[existingIdx] = entry;
+        }
+        else
+        {
+            _entries.Insert(0, entry);
+        }
+        return true;
+    }
+
+    public bool RemoveManualApp(string entryId)
+    {
+        if (string.IsNullOrWhiteSpace(entryId)) return false;
+        int removed = _manualApps.RemoveAll(m => string.Equals(m.Id, entryId, StringComparison.OrdinalIgnoreCase));
+        if (removed == 0) return false;
+
+        _entries.RemoveAll(e => string.Equals(e.Id, entryId, StringComparison.OrdinalIgnoreCase));
+        for (int i = _entries.Count - 1; i >= 0; i--)
+        {
+            if (_entries[i].IsFolder)
+            {
+                var remaining = _entries[i].Children.Where(c => !string.Equals(c.Id, entryId, StringComparison.OrdinalIgnoreCase)).ToList();
+                if (remaining.Count == 0) _entries.RemoveAt(i);
+                else if (remaining.Count == 1) _entries[i] = remaining[0];
+                else _entries[i] = _entries[i] with { Children = remaining };
+            }
+        }
+        _hiddenIds.Remove(entryId);
+        _forceShownIds.Remove(entryId);
+        _lockedIds.Remove(entryId);
+        return true;
+    }
 
     public bool ToggleLock(string entryId)
     {
@@ -137,9 +185,13 @@ public sealed class LaunchpadLayoutManager
             return visible;
         }
 
-        // Respect locked items pinned at their exact current indices while sorting unlocked items smoothly around them!
-        var unlocked = visible.Where(e => !IsLocked(e.Id)).ToList();
-        unlocked = activeSort switch
+        return ApplySortPreservingLocked(visible, activeSort);
+    }
+
+    private List<LaunchpadEntry> ApplySortPreservingLocked(List<LaunchpadEntry> source, LaunchpadSortMode sortMode)
+    {
+        var unlocked = source.Where(e => !IsLocked(e.Id)).ToList();
+        unlocked = sortMode switch
         {
             LaunchpadSortMode.NameAsc => unlocked.OrderBy(e => e.Title, StringComparer.CurrentCultureIgnoreCase).ToList(),
             LaunchpadSortMode.NameDesc => unlocked.OrderByDescending(e => e.Title, StringComparer.CurrentCultureIgnoreCase).ToList(),
@@ -147,9 +199,9 @@ public sealed class LaunchpadLayoutManager
             _ => unlocked
         };
 
-        var result = new List<LaunchpadEntry>(visible.Count);
+        var result = new List<LaunchpadEntry>(source.Count);
         int uIdx = 0;
-        foreach (var entry in visible)
+        foreach (var entry in source)
         {
             result.Add(IsLocked(entry.Id) ? entry : unlocked[uIdx++]);
         }
@@ -203,6 +255,13 @@ public sealed class LaunchpadLayoutManager
     public void SyncWithInstalledApps(IReadOnlyList<InstalledAppEntry> installed)
     {
         var byId = new Dictionary<string, InstalledAppEntry>(StringComparer.OrdinalIgnoreCase);
+        foreach (var manual in _manualApps)
+        {
+            if (!string.IsNullOrWhiteSpace(manual.Id))
+            {
+                byId.TryAdd(manual.Id, manual);
+            }
+        }
         foreach (var app in installed)
         {
             if (!string.IsNullOrWhiteSpace(app.Id))
@@ -238,6 +297,14 @@ public sealed class LaunchpadLayoutManager
             else if (byId.TryGetValue(entry.Id, out var fresh) && seen.Add(fresh.Id))
             {
                 synced.Add(ToEntry(fresh));
+            }
+        }
+
+        foreach (var manual in _manualApps)
+        {
+            if (seen.Add(manual.Id))
+            {
+                synced.Add(ToEntry(manual));
             }
         }
 
@@ -288,6 +355,16 @@ public sealed class LaunchpadLayoutManager
         if (string.Equals(sourceId, targetId, StringComparison.OrdinalIgnoreCase)) return false;
         if (IsLocked(sourceId)) return false;
 
+        // If user starts dragging while in an auto-sort mode, snapshot the sorted order into _entries first
+        // so switching to Custom order never causes unrelated icons to jump!
+        if (SortMode != LaunchpadSortMode.Custom)
+        {
+            var materialized = ApplySortPreservingLocked(_entries, SortMode);
+            _entries.Clear();
+            _entries.AddRange(materialized);
+            SortMode = LaunchpadSortMode.Custom;
+        }
+
         int srcIdx = _entries.FindIndex(e => string.Equals(e.Id, sourceId, StringComparison.OrdinalIgnoreCase));
         int dstIdx = _entries.FindIndex(e => string.Equals(e.Id, targetId, StringComparison.OrdinalIgnoreCase));
         if (srcIdx < 0 || dstIdx < 0) return false;
@@ -295,7 +372,6 @@ public sealed class LaunchpadLayoutManager
         var item = _entries[srcIdx];
         _entries.RemoveAt(srcIdx);
         _entries.Insert(dstIdx, item);
-        SortMode = LaunchpadSortMode.Custom;
         return true;
     }
 
@@ -377,6 +453,7 @@ public sealed class LaunchpadLayoutManager
             var state = new PersistedState
             {
                 Entries = _entries,
+                ManualApps = _manualApps,
                 HiddenAppIds = _hiddenIds.ToList(),
                 ForceShownAppIds = _forceShownIds.ToList(),
                 LockedAppIds = _lockedIds.ToList(),
@@ -409,6 +486,8 @@ public sealed class LaunchpadLayoutManager
             {
                 _entries.Clear();
                 _entries.AddRange(state.Entries);
+                _manualApps.Clear();
+                _manualApps.AddRange(state.ManualApps);
                 _hiddenIds.Clear();
                 foreach (var id in state.HiddenAppIds) _hiddenIds.Add(id);
                 _forceShownIds.Clear();

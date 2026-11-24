@@ -9,28 +9,29 @@ using GlassShell.Core.Search;
 namespace GlassShell.Core.Discovery;
 
 /// <summary>
-/// Scans Windows Start Menu shortcuts (.lnk) and common system tools to build a clean, deduplicated
-/// installed application catalog for Launchpad and Spotlight.
+/// Scans Windows 11 shell:AppsFolder (all Store/UWP/MSIX + registered Win32 apps) plus Start Menu
+/// and Desktop shortcuts (.lnk) to build a complete, deduplicated application catalog for Launchpad and Spotlight.
 /// </summary>
 public static class InstalledAppScanner
 {
-    private static readonly string[] ExcludedNameKeywords =
+    private static readonly Guid FolderIdAppsFolder = new("1e87508d-89c2-42f0-8a7e-645a0f50ca58");
+    private static readonly Guid BhidEnumItems = new("94f60519-2850-4924-aa5a-d15e84868039");
+    private const uint SigdnNormalDisplay = 0x00000000;
+    private const uint SigdnDesktopAbsoluteParsing = 0x80028000;
+
+    private static readonly string[] HardExcludedNameKeywords =
     [
-        "uninstall", "卸载", "readme", "read me", "发行说明", "更新日志", "release notes", "changelog",
-        "帮助", "help", "documentation", "manual", "使用手册", "说明文档", "license", "许可", "授权",
-        "website", "主页", "官网", "知识融合", "指南", "教程", "tutorial", "guide", "feedback", "反馈",
-        "support", "技术支持", "配置工具", "修复", "repair", "diagnostics", "诊断", "命令行", "command prompt for",
-        "developer powershell", "developer command", "native tools"
+        "uninstall", "卸载"
     ];
 
     private static readonly string[] ExcludedTargetExtensions =
     [
-        ".url", ".chm", ".txt", ".pdf", ".html", ".htm", ".md", ".bat", ".cmd", ".ps1", ".msc", ".cpl", ".vbs", ".rtf", ".doc", ".docx"
+        ".url", ".chm", ".txt", ".pdf", ".html", ".htm", ".md", ".vbs", ".rtf", ".doc", ".docx"
     ];
 
     private static readonly string[] ExcludedTargetExecutables =
     [
-        "hh.exe", "msiexec.exe", "rundll32.exe", "regedit.exe", "mmc.exe", "wscript.exe", "cscript.exe"
+        "hh.exe", "msiexec.exe", "wscript.exe", "cscript.exe"
     ];
 
     public static IReadOnlyList<InstalledAppEntry> ScanInstalledApps()
@@ -39,6 +40,7 @@ public static class InstalledAppScanner
         var seenTargets = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var seenNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
+        // 1. Classic Start Menu & Desktop .lnk shortcuts (exact .lnk working dirs, arguments, portable apps)
         string[] roots =
         [
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonStartMenu), "Programs"),
@@ -50,10 +52,10 @@ public static class InstalledAppScanner
         foreach (string root in roots)
         {
             if (!Directory.Exists(root)) continue;
-            foreach (string lnk in EnumerateShortcutsSafe(root, maxDepth: 3))
+            foreach (string lnk in EnumerateShortcutsSafe(root, maxDepth: 4))
             {
                 string displayName = Path.GetFileNameWithoutExtension(lnk).Trim();
-                if (string.IsNullOrWhiteSpace(displayName) || IsExcludedName(displayName))
+                if (string.IsNullOrWhiteSpace(displayName) || IsHardExcludedName(displayName))
                 {
                     continue;
                 }
@@ -91,7 +93,10 @@ public static class InstalledAppScanner
             }
         }
 
-        // Ensure core Windows apps are always present even if omitted from classic Start Menu folders
+        // 2. Canonical Windows 11 shell:AppsFolder enumeration (catches ALL Store/UWP/MSIX + registered Win32 apps!)
+        ScanAppsFolder(results, seenTargets, seenNames);
+
+        // 3. Ensure core Windows apps are always present even if omitted
         AddBuiltInIfMissing(results, seenTargets, seenNames, "文件资源管理器", @"C:\Windows\explorer.exe");
         AddBuiltInIfMissing(results, seenTargets, seenNames, "记事本", @"C:\Windows\System32\notepad.exe");
         AddBuiltInIfMissing(results, seenTargets, seenNames, "计算器", @"C:\Windows\System32\calc.exe");
@@ -99,6 +104,120 @@ public static class InstalledAppScanner
         AddBuiltInIfMissing(results, seenTargets, seenNames, "命令提示符", @"C:\Windows\System32\cmd.exe");
 
         return results.OrderBy(a => a.Name, StringComparer.CurrentCultureIgnoreCase).ToList();
+    }
+
+    public static InstalledAppEntry? CreateManualEntry(string filePath)
+    {
+        if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath)) return null;
+
+        string fullPath = Path.GetFullPath(filePath);
+        string displayName = Path.GetFileNameWithoutExtension(fullPath).Trim();
+        if (string.IsNullOrWhiteSpace(displayName)) displayName = Path.GetFileName(fullPath);
+
+        string iconPath = fullPath;
+        if (fullPath.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase))
+        {
+            string? resolved = TryResolveShortcutTarget(fullPath, out string? iconLoc);
+            if (!string.IsNullOrWhiteSpace(iconLoc) && File.Exists(iconLoc))
+            {
+                iconPath = iconLoc!;
+            }
+            else if (!string.IsNullOrWhiteSpace(resolved) && File.Exists(resolved))
+            {
+                iconPath = resolved!;
+            }
+        }
+
+        return new InstalledAppEntry(
+            Id: $"manual:{fullPath.ToLowerInvariant()}",
+            Name: displayName,
+            LaunchTarget: fullPath,
+            IconPath: iconPath,
+            IsUwp: false,
+            PinyinInitials: PinyinInitials.GetInitials(displayName));
+    }
+
+    private static void ScanAppsFolder(
+        List<InstalledAppEntry> results,
+        HashSet<string> seenTargets,
+        HashSet<string> seenNames)
+    {
+        IShellItem? appsFolder = null;
+        IEnumShellItems? enumerator = null;
+        try
+        {
+            Guid folderId = FolderIdAppsFolder;
+            Guid shellItemIid = typeof(IShellItem).GUID;
+            int hr = SHGetKnownFolderItem(ref folderId, 0, 0, ref shellItemIid, out appsFolder);
+            if (hr != 0 || appsFolder is null) return;
+
+            Guid bhid = BhidEnumItems;
+            Guid enumIid = typeof(IEnumShellItems).GUID;
+            hr = appsFolder.BindToHandler(0, ref bhid, ref enumIid, out nint enumPtr);
+            if (hr != 0 || enumPtr == 0) return;
+
+            enumerator = (IEnumShellItems)Marshal.GetObjectForIUnknown(enumPtr);
+            Marshal.Release(enumPtr);
+
+            while (enumerator.Next(1, out IShellItem? item, out uint fetched) == 0 && fetched == 1 && item is not null)
+            {
+                try
+                {
+                    if (item.GetDisplayName(SigdnNormalDisplay, out string? rawName) != 0 || string.IsNullOrWhiteSpace(rawName))
+                    {
+                        continue;
+                    }
+
+                    string displayName = rawName.Trim();
+                    if (IsHardExcludedName(displayName)) continue;
+
+                    if (item.GetDisplayName(SigdnDesktopAbsoluteParsing, out string? parsingName) != 0 || string.IsNullOrWhiteSpace(parsingName))
+                    {
+                        continue;
+                    }
+
+                    parsingName = parsingName.Trim();
+                    // Strip leading AppsFolder prefix if Windows returns the full parsing path
+                    string aumid = parsingName;
+                    int bangSep = parsingName.IndexOf(@"AppsFolder\", StringComparison.OrdinalIgnoreCase);
+                    if (bangSep >= 0)
+                    {
+                        aumid = parsingName[(bangSep + @"AppsFolder\".Length)..];
+                    }
+
+                    bool isDirectFile = File.Exists(parsingName);
+                    if (isDirectFile && IsExcludedTarget(parsingName)) continue;
+                    if (!isDirectFile && aumid.Contains("unins", StringComparison.OrdinalIgnoreCase)) continue;
+
+                    string shellPath = isDirectFile ? parsingName : $"shell:AppsFolder\\{aumid}";
+                    string dedupeKey = isDirectFile ? parsingName : aumid;
+
+                    if (!seenNames.Add(displayName) || !seenTargets.Add(dedupeKey))
+                    {
+                        continue;
+                    }
+
+                    results.Add(new InstalledAppEntry(
+                        Id: $"uwp:{dedupeKey.ToLowerInvariant()}",
+                        Name: displayName,
+                        LaunchTarget: shellPath,
+                        IconPath: shellPath,
+                        IsUwp: !isDirectFile,
+                        PinyinInitials: PinyinInitials.GetInitials(displayName)));
+                }
+                catch { }
+                finally
+                {
+                    Marshal.ReleaseComObject(item);
+                }
+            }
+        }
+        catch { }
+        finally
+        {
+            if (enumerator is not null) Marshal.ReleaseComObject(enumerator);
+            if (appsFolder is not null) Marshal.ReleaseComObject(appsFolder);
+        }
     }
 
     public static IReadOnlyList<IndexedFileEntry> ScanLocalUserFiles(int maxFiles = 300)
@@ -206,9 +325,9 @@ public static class InstalledAppScanner
         return false;
     }
 
-    private static bool IsExcludedName(string name)
+    private static bool IsHardExcludedName(string name)
     {
-        foreach (string kw in ExcludedNameKeywords)
+        foreach (string kw in HardExcludedNameKeywords)
         {
             if (name.Contains(kw, StringComparison.OrdinalIgnoreCase)) return true;
         }
@@ -247,6 +366,53 @@ public static class InstalledAppScanner
         {
             return null;
         }
+    }
+
+    [DllImport("shell32.dll")]
+    private static extern int SHGetKnownFolderItem(
+        ref Guid rfid,
+        uint dwFlags,
+        nint hToken,
+        ref Guid riid,
+        [MarshalAs(UnmanagedType.Interface)] out IShellItem? ppv);
+
+    [ComImport]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    [Guid("43826d1e-e718-42ee-bc55-a1e261c37bfe")]
+    private interface IShellItem
+    {
+        [PreserveSig]
+        int BindToHandler(nint pbc, ref Guid bhid, ref Guid riid, out nint ppv);
+
+        [PreserveSig]
+        int GetParent(out IShellItem ppsi);
+
+        [PreserveSig]
+        int GetDisplayName(uint sigdnName, [MarshalAs(UnmanagedType.LPWStr)] out string? ppszName);
+
+        [PreserveSig]
+        int GetAttributes(uint sfgaoMask, out uint psfgaoAttribs);
+
+        [PreserveSig]
+        int Compare(IShellItem psi, uint hint, out int piOrder);
+    }
+
+    [ComImport]
+    [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    [Guid("70629033-e363-4a28-a567-0db78006e6d7")]
+    private interface IEnumShellItems
+    {
+        [PreserveSig]
+        int Next(uint celt, [MarshalAs(UnmanagedType.Interface)] out IShellItem? rgelt, out uint pceltFetched);
+
+        [PreserveSig]
+        int Skip(uint celt);
+
+        [PreserveSig]
+        int Reset();
+
+        [PreserveSig]
+        int Clone(out IEnumShellItems ppenum);
     }
 
     [ComImport]

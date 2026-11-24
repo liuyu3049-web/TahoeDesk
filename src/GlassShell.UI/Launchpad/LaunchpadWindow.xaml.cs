@@ -20,12 +20,14 @@ using GlassShell.Core.Launchpad;
 using GlassShell.Core.Search;
 using GlassShell.Core.Shell;
 using GlassShell.UI.Glass;
+using Microsoft.Win32;
 
 namespace GlassShell.UI.Launchpad;
 
 public partial class LaunchpadWindow : Window
 {
     private static readonly DropShadowEffect LabelShadow;
+    private static readonly DropShadowEffect GhostShadow;
 
     static LaunchpadWindow()
     {
@@ -37,19 +39,36 @@ public partial class LaunchpadWindow : Window
             Opacity = 0.65
         };
         LabelShadow.Freeze();
+
+        GhostShadow = new DropShadowEffect
+        {
+            Color = Colors.Black,
+            BlurRadius = 18,
+            ShadowDepth = 6,
+            Opacity = 0.55
+        };
+        GhostShadow.Freeze();
     }
 
     private readonly LaunchpadLayoutManager _layout = new();
     private readonly IconExtractor _iconExtractor = new();
     private readonly ConcurrentDictionary<string, BitmapSource?> _iconCache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly List<(LaunchpadEntry Entry, Border Tile)> _renderedTiles = [];
     private readonly string _layoutPath;
 
     private int _currentPage;
     private LaunchpadFilterMode _filterMode = LaunchpadFilterMode.Primary;
     private string? _openFolderId;
-    private string? _draggingEntryId;
-    private Point _dragStart;
     private int _renderGeneration;
+
+    // Pure-WPF mouse-capture drag-to-reorder state (zero OLE DoDragDrop issues!)
+    private LaunchpadEntry? _pressEntry;
+    private Border? _pressTile;
+    private Point _pressStartPoint;
+    private bool _isDragging;
+    private Border? _dragGhost;
+    private Border? _hoveredDropTile;
+    private LaunchpadEntry? _hoveredDropEntry;
 
     public LaunchpadWindow(DxgiBackdropSampler sampler)
     {
@@ -69,16 +88,18 @@ public partial class LaunchpadWindow : Window
         };
     }
 
+    public event Action? RescanRequested;
+
     public void SyncApps(IReadOnlyList<InstalledAppEntry> apps)
     {
         _layout.SyncWithInstalledApps(apps);
-        _currentPage = _layout.ClampPage(_currentPage);
+        _currentPage = _layout.ClampPage(_currentPage, _filterMode);
 
-        // Pre-warm wallpaper blur and app icons completely off the UI thread so Launchpad opens in <10ms!
+        // Pre-warm wallpaper blur and app icons off the UI thread so Launchpad opens in <10ms
         _ = Task.Run(() =>
         {
             BlurredWallpaperProvider.GetBlurredWallpaper();
-            foreach (var app in apps.Take(70))
+            foreach (var app in _layout.ManualApps.Concat(apps).Take(90))
             {
                 string? path = app.IconPath ?? app.LaunchTarget;
                 if (!string.IsNullOrWhiteSpace(path))
@@ -103,9 +124,10 @@ public partial class LaunchpadWindow : Window
         }
 
         _layout.SyncWithInstalledApps(apps);
-        _currentPage = _layout.ClampPage(_currentPage);
+        _currentPage = _layout.ClampPage(_currentPage, _filterMode);
         _openFolderId = null;
         FolderOverlay.Visibility = Visibility.Collapsed;
+        CancelActiveDrag();
 
         WallpaperBlurImage.Source = BlurredWallpaperProvider.GetBlurredWallpaper();
 
@@ -128,6 +150,7 @@ public partial class LaunchpadWindow : Window
     public void DismissSmooth()
     {
         if (!IsVisible) return;
+        CancelActiveDrag();
         FolderOverlay.Visibility = Visibility.Collapsed;
         _openFolderId = null;
         Hide();
@@ -145,9 +168,11 @@ public partial class LaunchpadWindow : Window
 
     private void RenderCurrentView()
     {
+        CancelActiveDrag();
         int gen = ++_renderGeneration;
         AppsGrid.Children.Clear();
         PageDotsPanel.Children.Clear();
+        _renderedTiles.Clear();
 
         string query = SearchBox.Text.Trim();
         _currentPage = _layout.ClampPage(_currentPage, _filterMode);
@@ -159,7 +184,9 @@ public partial class LaunchpadWindow : Window
 
         foreach (var entry in pageItems)
         {
-            AppsGrid.Children.Add(BuildTile(entry, isInsideFolder: false, pendingAsyncLoads));
+            var tile = BuildTile(entry, isInsideFolder: false, pendingAsyncLoads);
+            _renderedTiles.Add((entry, tile));
+            AppsGrid.Children.Add(tile);
         }
 
         if (pendingAsyncLoads.Count > 0)
@@ -208,7 +235,7 @@ public partial class LaunchpadWindow : Window
         }
     }
 
-    private UIElement BuildTile(LaunchpadEntry entry, bool isInsideFolder, List<(string Path, Image Target)>? asyncLoads)
+    private Border BuildTile(LaunchpadEntry entry, bool isInsideFolder, List<(string Path, Image Target)>? asyncLoads)
     {
         var iconScale = new ScaleTransform(1.0, 1.0);
         UIElement iconVisual = entry.IsFolder
@@ -272,82 +299,56 @@ public partial class LaunchpadWindow : Window
         var tile = new Border
         {
             Background = Brushes.Transparent,
-            Padding = new Thickness(6),
+            BorderBrush = Brushes.Transparent,
+            BorderThickness = new Thickness(1.5),
+            CornerRadius = new CornerRadius(18),
+            Padding = new Thickness(8, 6, 8, 6),
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center,
             Cursor = Cursors.Hand,
-            AllowDrop = !isInsideFolder,
             Child = stack
         };
 
-        // Authentic macOS subtle icon lift on hover (no ugly rectangular highlight box!)
+        // Subtle macOS icon lift on hover
         tile.MouseEnter += (_, _) =>
         {
+            if (_isDragging) return;
             var anim = new DoubleAnimation(1.08, TimeSpan.FromMilliseconds(110));
             iconScale.BeginAnimation(ScaleTransform.ScaleXProperty, anim);
             iconScale.BeginAnimation(ScaleTransform.ScaleYProperty, anim);
         };
         tile.MouseLeave += (_, _) =>
         {
+            if (_isDragging) return;
             var anim = new DoubleAnimation(1.0, TimeSpan.FromMilliseconds(120));
             iconScale.BeginAnimation(ScaleTransform.ScaleXProperty, anim);
             iconScale.BeginAnimation(ScaleTransform.ScaleYProperty, anim);
         };
 
-        tile.MouseLeftButtonDown += (_, e) =>
+        if (isInsideFolder)
         {
-            e.Handled = true;
-            _dragStart = e.GetPosition(this);
-            _draggingEntryId = entry.Id;
-        };
-
-        tile.MouseMove += (_, e) =>
-        {
-            if (!isInsideFolder && e.LeftButton == MouseButtonState.Pressed && _draggingEntryId == entry.Id && !_layout.IsLocked(entry.Id))
+            tile.MouseLeftButtonUp += (_, e) =>
             {
-                var pos = e.GetPosition(this);
-                if ((pos - _dragStart).Length > 10)
+                e.Handled = true;
+                if (!string.IsNullOrWhiteSpace(entry.LaunchTarget))
                 {
-                    _draggingEntryId = null;
-                    DragDrop.DoDragDrop(tile, new DataObject("GlassShell.LaunchpadId", entry.Id), DragDropEffects.Move);
+                    DismissSmooth();
+                    LaunchApp(entry.LaunchTarget);
                 }
-            }
-        };
-
-        tile.Drop += (_, e) =>
+            };
+        }
+        else
         {
-            if (isInsideFolder || !e.Data.GetDataPresent("GlassShell.LaunchpadId")) return;
-            e.Handled = true;
-            string sourceId = (string)e.Data.GetData("GlassShell.LaunchpadId");
-            if (string.Equals(sourceId, entry.Id, StringComparison.OrdinalIgnoreCase)) return;
-
-            // Default drag = smooth auto-flow reorder; Ctrl+Drag = group into folder!
-            bool ctrlFolder = (Keyboard.Modifiers & ModifierKeys.Control) != 0;
-            bool changed = ctrlFolder
-                ? _layout.MergeIntoFolder(sourceId, entry.Id)
-                : _layout.Reorder(sourceId, entry.Id);
-            if (changed)
+            tile.MouseLeftButtonDown += (_, e) =>
             {
-                UpdateSortLabel();
-                _layout.Save(_layoutPath);
-                RenderCurrentView();
-            }
-        };
-
-        tile.MouseLeftButtonUp += (_, e) =>
-        {
-            e.Handled = true;
-            _draggingEntryId = null;
-            if (entry.IsFolder)
-            {
-                OpenFolderOverlay(entry);
-            }
-            else if (!string.IsNullOrWhiteSpace(entry.LaunchTarget))
-            {
-                DismissSmooth();
-                LaunchApp(entry.LaunchTarget);
-            }
-        };
+                e.Handled = true;
+                _pressEntry = entry;
+                _pressTile = tile;
+                _pressStartPoint = e.GetPosition(RootGrid);
+                _isDragging = false;
+                RootGrid.CaptureMouse();
+            };
+        }
 
         if (isInsideFolder && _openFolderId is not null)
         {
@@ -410,11 +411,203 @@ public partial class LaunchpadWindow : Window
                     }
                 };
                 ctx.Items.Add(hideItem);
+
+                if (_layout.IsManualApp(entry.Id))
+                {
+                    ctx.Items.Add(new Separator());
+                    var removeManualItem = new MenuItem { Header = "从启动台移除（手动添加）" };
+                    removeManualItem.Click += (_, _) =>
+                    {
+                        if (_layout.RemoveManualApp(entry.Id))
+                        {
+                            _layout.Save(_layoutPath);
+                            RenderCurrentView();
+                        }
+                    };
+                    ctx.Items.Add(removeManualItem);
+                }
             }
             tile.ContextMenu = ctx;
         }
 
         return tile;
+    }
+
+    private void OnRootMouseMove(object sender, MouseEventArgs e)
+    {
+        if (_pressEntry is null || _pressTile is null) return;
+        if (e.LeftButton != MouseButtonState.Pressed)
+        {
+            CancelActiveDrag();
+            return;
+        }
+
+        Point pos = e.GetPosition(RootGrid);
+        if (!_isDragging)
+        {
+            bool canDrag = !_layout.IsLocked(_pressEntry.Id)
+                && string.IsNullOrEmpty(SearchBox.Text)
+                && _filterMode != LaunchpadFilterMode.Hidden;
+            if (!canDrag || (pos - _pressStartPoint).Length < 8.0) return;
+
+            StartVisualDrag(_pressEntry, _pressTile, pos);
+        }
+
+        if (_dragGhost is not null)
+        {
+            Canvas.SetLeft(_dragGhost, pos.X - 44);
+            Canvas.SetTop(_dragGhost, pos.Y - 44);
+        }
+
+        UpdateDropTargetHighlight(pos);
+    }
+
+    private void OnRootMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
+    {
+        if (_pressEntry is null) return;
+        e.Handled = true;
+
+        var pressed = _pressEntry;
+        var dropTarget = _hoveredDropEntry;
+        bool wasDragging = _isDragging;
+
+        CancelActiveDrag();
+
+        if (wasDragging)
+        {
+            if (dropTarget is not null && !string.Equals(pressed.Id, dropTarget.Id, StringComparison.OrdinalIgnoreCase))
+            {
+                bool ctrlFolder = (Keyboard.Modifiers & ModifierKeys.Control) != 0;
+                bool changed = ctrlFolder
+                    ? _layout.MergeIntoFolder(pressed.Id, dropTarget.Id)
+                    : _layout.Reorder(pressed.Id, dropTarget.Id);
+                if (changed)
+                {
+                    UpdateSortLabel();
+                    _layout.Save(_layoutPath);
+                    RenderCurrentView();
+                }
+            }
+            return;
+        }
+
+        // Normal click -> open folder or launch application
+        if (pressed.IsFolder)
+        {
+            OpenFolderOverlay(pressed);
+        }
+        else if (!string.IsNullOrWhiteSpace(pressed.LaunchTarget))
+        {
+            DismissSmooth();
+            LaunchApp(pressed.LaunchTarget);
+        }
+    }
+
+    private void OnRootLostMouseCapture(object sender, MouseEventArgs e)
+    {
+        if (_pressEntry is not null || _isDragging)
+        {
+            CancelActiveDrag();
+        }
+    }
+
+    private void StartVisualDrag(LaunchpadEntry entry, Border sourceTile, Point cursorPos)
+    {
+        _isDragging = true;
+        sourceTile.Opacity = 0.22;
+
+        UIElement ghostIcon = entry.IsFolder
+            ? BuildFolderTileVisual(entry, asyncLoads: null)
+            : BuildAppIconVisual(entry.IconPath ?? entry.LaunchTarget, size: 78, asyncLoads: null);
+
+        _dragGhost = new Border
+        {
+            Width = 88,
+            Height = 88,
+            Background = Brushes.Transparent,
+            IsHitTestVisible = false,
+            Effect = GhostShadow,
+            Child = ghostIcon
+        };
+
+        DragOverlayCanvas.Children.Clear();
+        DragOverlayCanvas.Children.Add(_dragGhost);
+        Canvas.SetLeft(_dragGhost, cursorPos.X - 44);
+        Canvas.SetTop(_dragGhost, cursorPos.Y - 44);
+    }
+
+    private void UpdateDropTargetHighlight(Point cursorInRoot)
+    {
+        (LaunchpadEntry Entry, Border Tile)? best = null;
+        double bestDistSq = double.MaxValue;
+
+        foreach (var item in _renderedTiles)
+        {
+            if (item.Entry.Id == _pressEntry?.Id) continue;
+            if (!item.Tile.IsLoaded || item.Tile.ActualWidth <= 0) continue;
+
+            try
+            {
+                var rect = item.Tile.TransformToAncestor(RootGrid)
+                    .TransformBounds(new Rect(0, 0, item.Tile.ActualWidth, item.Tile.ActualHeight));
+                rect.Inflate(28, 22);
+                if (!rect.Contains(cursorInRoot)) continue;
+
+                double cx = rect.Left + rect.Width * 0.5;
+                double cy = rect.Top + rect.Height * 0.5;
+                double d2 = (cx - cursorInRoot.X) * (cx - cursorInRoot.X) + (cy - cursorInRoot.Y) * (cy - cursorInRoot.Y);
+                if (d2 < bestDistSq)
+                {
+                    bestDistSq = d2;
+                    best = item;
+                }
+            }
+            catch { }
+        }
+
+        if (_hoveredDropTile is not null && _hoveredDropTile != best?.Tile)
+        {
+            _hoveredDropTile.Background = Brushes.Transparent;
+            _hoveredDropTile.BorderBrush = Brushes.Transparent;
+        }
+
+        _hoveredDropTile = best?.Tile;
+        _hoveredDropEntry = best?.Entry;
+
+        if (_hoveredDropTile is not null)
+        {
+            bool ctrlFolder = (Keyboard.Modifiers & ModifierKeys.Control) != 0;
+            _hoveredDropTile.Background = new SolidColorBrush(ctrlFolder
+                ? Color.FromArgb(0x40, 0x0A, 0x84, 0xFF)
+                : Color.FromArgb(0x2E, 0xFF, 0xFF, 0xFF));
+            _hoveredDropTile.BorderBrush = new SolidColorBrush(ctrlFolder
+                ? Color.FromArgb(0xCC, 0x5A, 0xC8, 0xFA)
+                : Color.FromArgb(0x88, 0xFF, 0xFF, 0xFF));
+        }
+    }
+
+    private void CancelActiveDrag()
+    {
+        if (RootGrid.IsMouseCaptured)
+        {
+            RootGrid.ReleaseMouseCapture();
+        }
+        if (_pressTile is not null)
+        {
+            _pressTile.Opacity = 1.0;
+        }
+        if (_hoveredDropTile is not null)
+        {
+            _hoveredDropTile.Background = Brushes.Transparent;
+            _hoveredDropTile.BorderBrush = Brushes.Transparent;
+        }
+        DragOverlayCanvas.Children.Clear();
+        _dragGhost = null;
+        _hoveredDropTile = null;
+        _hoveredDropEntry = null;
+        _pressTile = null;
+        _pressEntry = null;
+        _isDragging = false;
     }
 
     private UIElement BuildFolderTileVisual(LaunchpadEntry folder, List<(string Path, Image Target)>? asyncLoads)
@@ -565,6 +758,55 @@ public partial class LaunchpadWindow : Window
         RenderCurrentView();
     }
 
+    private void OnAddManualAppClick(object sender, RoutedEventArgs e)
+    {
+        CancelActiveDrag();
+        var dlg = new OpenFileDialog
+        {
+            Title = "选择要添加到启动台的应用程序",
+            Filter = "应用程序 (*.exe;*.lnk)|*.exe;*.lnk|所有文件 (*.*)|*.*",
+            Multiselect = true,
+            DereferenceLinks = false
+        };
+
+        bool? ok;
+        Topmost = false;
+        try
+        {
+            ok = dlg.ShowDialog(this);
+        }
+        finally
+        {
+            Topmost = true;
+            Activate();
+        }
+
+        if (ok != true || dlg.FileNames.Length == 0) return;
+
+        bool addedAny = false;
+        foreach (string file in dlg.FileNames)
+        {
+            var entry = InstalledAppScanner.CreateManualEntry(file);
+            if (entry is not null && _layout.AddManualApp(entry))
+            {
+                addedAny = true;
+            }
+        }
+
+        if (addedAny)
+        {
+            _currentPage = 0;
+            _layout.Save(_layoutPath);
+            RenderCurrentView();
+        }
+    }
+
+    private void OnRescanClick(object sender, RoutedEventArgs e)
+    {
+        CancelActiveDrag();
+        RescanRequested?.Invoke();
+    }
+
     private void UpdateSortLabel()
     {
         SortModeLabel.Text = _layout.SortMode switch
@@ -605,7 +847,11 @@ public partial class LaunchpadWindow : Window
     {
         if (e.Key == Key.Escape)
         {
-            if (FolderOverlay.Visibility == Visibility.Visible)
+            if (_isDragging)
+            {
+                CancelActiveDrag();
+            }
+            else if (FolderOverlay.Visibility == Visibility.Visible)
             {
                 CommitFolderTitle();
                 FolderOverlay.Visibility = Visibility.Collapsed;
@@ -661,6 +907,12 @@ public partial class LaunchpadWindow : Window
     {
         try
         {
+            if (target.StartsWith("shell:", StringComparison.OrdinalIgnoreCase))
+            {
+                Process.Start(new ProcessStartInfo("explorer.exe", target) { UseShellExecute = true });
+                return;
+            }
+
             string? workDir = System.IO.Path.GetDirectoryName(target);
             Process.Start(new ProcessStartInfo(target)
             {

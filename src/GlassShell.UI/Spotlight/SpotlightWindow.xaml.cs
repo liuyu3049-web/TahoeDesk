@@ -383,6 +383,10 @@ public partial class SpotlightWindow : Window
                     {
                         Process.Start(new ProcessStartInfo("explorer.exe", $"/select,\"{item.Payload}\"") { UseShellExecute = true });
                     }
+                    else if (item.Payload.StartsWith("shell:", StringComparison.OrdinalIgnoreCase))
+                    {
+                        Process.Start(new ProcessStartInfo("explorer.exe", item.Payload) { UseShellExecute = true });
+                    }
                     else
                     {
                         string? workDir = System.IO.Path.GetDirectoryName(item.Payload);

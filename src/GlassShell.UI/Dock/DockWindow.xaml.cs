@@ -109,32 +109,6 @@ public partial class DockWindow : Window
 
     public event Action? LaunchpadRequested;
     public event Action<GlassSettings>? SettingsUpdated;
-    public event Action<nint, Point>? RestoreFromDockRequested;
-
-    public bool TryGetIconScreenCenterDip(nint hwnd, string? exePath, out Point centerDip)
-    {
-        centerDip = new Point(Left + Width * 0.5, Top + Height - 36);
-        try
-        {
-            DockSlotVisual? match = _slots.FirstOrDefault(s => hwnd != 0 && s.Model.OpenWindowHandles.Contains(hwnd));
-            if (match is null && !string.IsNullOrWhiteSpace(exePath))
-            {
-                match = _slots.FirstOrDefault(s =>
-                    !string.IsNullOrWhiteSpace(s.Model.TargetPath)
-                    && string.Equals(s.Model.TargetPath, exePath, StringComparison.OrdinalIgnoreCase));
-            }
-
-            if (match is not null && match.Container.IsLoaded)
-            {
-                var ptPx = match.Container.PointToScreen(new Point(match.Container.ActualWidth * 0.5, match.Container.ActualHeight * 0.5));
-                centerDip = new Point(ptPx.X / _monitor.DpiScale, ptPx.Y / _monitor.DpiScale);
-                return true;
-            }
-        }
-        catch { }
-
-        return true;
-    }
 
     public void ApplySettings(GlassSettings settings, bool isDarkMode)
     {
@@ -333,6 +307,12 @@ public partial class DockWindow : Window
         container.MouseRightButtonUp += (_, e) =>
         {
             e.Handled = true;
+            if (model.Kind == DockItemKind.Launchpad)
+            {
+                HideInlineTooltip();
+                OpenNativeWindowsStartMenu();
+                return;
+            }
             ShowContextMenu(container, model);
         };
 
@@ -795,24 +775,9 @@ public partial class DockWindow : Window
         }
     }
 
-    private void ActivateOrAnimateRestore(nint hwnd, UIElement? anchor)
+    private static void ActivateOrAnimateRestore(nint hwnd, UIElement? anchor)
     {
-        if (WindowDockAnimator.IsWindowMinimized(hwnd) && RestoreFromDockRequested is not null)
-        {
-            Point centerDip = new(Left + Width * 0.5, Top + Height - 36);
-            if (anchor is FrameworkElement fe && fe.IsLoaded)
-            {
-                try
-                {
-                    var px = fe.PointToScreen(new Point(fe.ActualWidth * 0.5, fe.ActualHeight * 0.5));
-                    centerDip = new Point(px.X / _monitor.DpiScale, px.Y / _monitor.DpiScale);
-                }
-                catch { }
-            }
-            RestoreFromDockRequested.Invoke(hwnd, centerDip);
-            return;
-        }
-
+        _ = anchor;
         WindowTracker.ActivateWindow(hwnd);
     }
 
@@ -936,10 +901,58 @@ public partial class DockWindow : Window
         catch { }
     }
 
+    private static void OpenNativeWindowsStartMenu()
+    {
+        const uint INPUT_KEYBOARD = 1;
+        const uint KEYEVENTF_KEYUP = 0x0002;
+        const ushort VK_LWIN = 0x5B;
+
+        var inputs = new INPUT[2];
+        inputs[0].type = INPUT_KEYBOARD;
+        inputs[0].u.ki.wVk = VK_LWIN;
+        inputs[1].type = INPUT_KEYBOARD;
+        inputs[1].u.ki.wVk = VK_LWIN;
+        inputs[1].u.ki.dwFlags = KEYEVENTF_KEYUP;
+        SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>());
+    }
+
     [StructLayout(LayoutKind.Sequential)]
     private struct POINT { public int X; public int Y; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct INPUT
+    {
+        public uint type;
+        public InputUnion u;
+    }
+
+    [StructLayout(LayoutKind.Explicit)]
+    private struct InputUnion
+    {
+        [FieldOffset(0)] public MOUSEINPUT mi;
+        [FieldOffset(0)] public KEYBDINPUT ki;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MOUSEINPUT
+    {
+        public int dx, dy;
+        public uint mouseData, dwFlags, time;
+        public nuint dwExtraInfo;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct KEYBDINPUT
+    {
+        public ushort wVk, wScan;
+        public uint dwFlags, time;
+        public nuint dwExtraInfo;
+    }
 
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool GetCursorPos(out POINT lpPoint);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
 }

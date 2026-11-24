@@ -208,38 +208,21 @@
                 </Grid>
             </Grid>
 
-            <!-- Row 2: macOS Stage Manager (台前调度) & Mission Control (调度中心) -->
-            <Grid Margin="0,0,0,10">
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*" />
-                    <ColumnDefinition Width="10" />
-                    <ColumnDefinition Width="*" />
-                </Grid.ColumnDefinitions>
-
-                <Button x:Name="StageManagerBtn" Grid.Column="0" Style="{StaticResource CcBentoTileButtonStyle}" Click="OnStageManagerClick">
-                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                        <Border x:Name="StageManagerCircle" Width="28" Height="28" CornerRadius="14" Background="#458E8E93">
-                            <TextBlock Text="◫" FontSize="14" Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center" />
-                        </Border>
-                        <StackPanel Margin="8,0,0,0" VerticalAlignment="Center">
-                            <TextBlock Text="台前调度" FontSize="12" FontWeight="SemiBold" FontFamily="Microsoft YaHei UI, Segoe UI" Foreground="{DynamicResource CcFgBrush}" />
-                            <TextBlock x:Name="StageManagerStatusText" Text="已关闭" FontSize="10.5" FontFamily="Microsoft YaHei UI, Segoe UI" Foreground="{DynamicResource CcSubtleBrush}" />
-                        </StackPanel>
-                    </StackPanel>
-                </Button>
-
-                <Button Grid.Column="2" Style="{StaticResource CcBentoTileButtonStyle}" Click="OnMissionControlClick">
+            <!-- Row 2: macOS Mission Control (调度中心 — Win+Tab) -->
+            <Button Style="{StaticResource CcBentoTileButtonStyle}" Margin="0,0,0,10" Click="OnMissionControlClick">
+                <DockPanel>
+                    <TextBlock DockPanel.Dock="Right" Text="Win+Tab" FontSize="10.5" FontFamily="Microsoft YaHei UI, Segoe UI" Foreground="{DynamicResource CcSubtleBrush}" VerticalAlignment="Center" />
                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                         <Border Width="28" Height="28" CornerRadius="14" Background="#32ADE6">
                             <TextBlock Text="⊞" FontSize="13" Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center" />
                         </Border>
-                        <StackPanel Margin="8,0,0,0" VerticalAlignment="Center">
+                        <StackPanel Margin="10,0,0,0" VerticalAlignment="Center">
                             <TextBlock Text="调度中心" FontSize="12" FontWeight="SemiBold" FontFamily="Microsoft YaHei UI, Segoe UI" Foreground="{DynamicResource CcFgBrush}" />
-                            <TextBlock Text="多窗口总览" FontSize="10.5" FontFamily="Microsoft YaHei UI, Segoe UI" Foreground="{DynamicResource CcSubtleBrush}" />
+                            <TextBlock Text="多窗口与虚拟桌面总览" FontSize="10.5" FontFamily="Microsoft YaHei UI, Segoe UI" Foreground="{DynamicResource CcSubtleBrush}" />
                         </StackPanel>
                     </StackPanel>
-                </Button>
-            </Grid>
+                </DockPanel>
+            </Button>
 
             <!-- Brightness Slider Card (auto-hidden when hardware unsupported) -->
             <Border x:Name="BrightnessCard"

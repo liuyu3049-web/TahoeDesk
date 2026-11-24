@@ -36,7 +36,6 @@ public partial class ControlCenterPopup : Popup
 
     private ThemeMode _currentTheme = ThemeMode.System;
     private RadioState _radioState = RadioState.Unavailable;
-    private bool _stageManagerEnabled;
     private bool _suppressSliderEvents = true;
     private SubPage _activePage = SubPage.Main;
     private int _pendingBrightness = -1;
@@ -67,7 +66,6 @@ public partial class ControlCenterPopup : Popup
     public nint OwnerAnchorHwnd { get; set; }
 
     public event Action<ThemeMode>? ThemeChangeRequested;
-    public event Action<bool>? StageManagerToggled;
 
     public void SwitchPage(SubPage page)
     {
@@ -81,15 +79,6 @@ public partial class ControlCenterPopup : Popup
             if (page == SubPage.Wifi) _ = RefreshWifiListAsync();
             else if (page == SubPage.Bluetooth) _ = RefreshBluetoothListAsync();
         }
-    }
-
-    public void SetStageManagerState(bool enabled)
-    {
-        _stageManagerEnabled = enabled;
-        StageManagerCircle.Background = enabled
-            ? new SolidColorBrush(Color.FromRgb(0x0A, 0x84, 0xFF))
-            : new SolidColorBrush(Color.FromArgb(0x45, 0x8E, 0x8E, 0x93));
-        StageManagerStatusText.Text = enabled ? "单应用聚焦" : "已关闭";
     }
 
     private IEnumerable<nint> CollectOpenHwnds()
@@ -470,12 +459,6 @@ public partial class ControlCenterPopup : Popup
         };
         _currentTheme = next;
         ThemeChangeRequested?.Invoke(next);
-    }
-
-    private void OnStageManagerClick(object sender, RoutedEventArgs e)
-    {
-        SetStageManagerState(!_stageManagerEnabled);
-        StageManagerToggled?.Invoke(_stageManagerEnabled);
     }
 
     private void OnMissionControlClick(object sender, RoutedEventArgs e)

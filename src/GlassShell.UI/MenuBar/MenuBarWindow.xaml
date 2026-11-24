@@ -32,6 +32,7 @@
                         Style="{StaticResource MenuBarButtonStyle}"
                         Padding="8,0,8,0"
                         Click="OnWinLogoClick"
+                        PreviewMouseRightButtonUp="OnWinLogoRightClick"
                         MouseEnter="OnWinLogoHover">
                     <Path Data="M0,0 H6 V6 H0 Z M7.5,0 H13.5 V6 H7.5 Z M0,7.5 H6 V13.5 H0 Z M7.5,7.5 H13.5 V13.5 H7.5 Z"
                           Fill="{DynamicResource MenuBarForegroundBrush}"

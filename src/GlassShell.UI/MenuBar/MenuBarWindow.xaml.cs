@@ -79,7 +79,6 @@ public partial class MenuBarWindow : Window
         _controlCenterPopup.Closed += (_, _) => ControlCenterButton.Tag = null;
         _batteryPopup.Closed += (_, _) => BatteryButton.Tag = null;
         _controlCenterPopup.ThemeChangeRequested += theme => SettingsUpdated?.Invoke(_settings with { Theme = theme });
-        _controlCenterPopup.StageManagerToggled += enabled => SettingsUpdated?.Invoke(_settings with { StageManagerEnabled = enabled });
         ApplySettings(settings, isDarkMode);
         PositionToMonitor(monitor);
 
@@ -117,7 +116,6 @@ public partial class MenuBarWindow : Window
         _trayOverflowPopup.ConfigureVisuals(_sampler, settings.OpacityPreset, isDarkMode);
         _controlCenterPopup.ConfigureVisuals(_sampler, settings, isDarkMode);
         _batteryPopup.ConfigureVisuals(_sampler, settings.OpacityPreset, isDarkMode);
-        _controlCenterPopup.SetStageManagerState(settings.StageManagerEnabled);
         WifiBarButton.Visibility = settings.ShowMenuBarWifiIcon ? Visibility.Visible : Visibility.Collapsed;
         UpdateTopBarInk(settings.ShowMenuBarBackground, isDarkMode);
         RebuildTrayVisuals();
@@ -258,6 +256,12 @@ public partial class MenuBarWindow : Window
 
     private void OnWinLogoClick(object sender, RoutedEventArgs e) => ToggleMenu(WinLogoButton, BuildWinSystemMenu());
 
+    private void OnWinLogoRightClick(object sender, MouseButtonEventArgs e)
+    {
+        e.Handled = true;
+        OpenMenu(WinLogoButton, BuildWinPowerUserMenu());
+    }
+
     private void OnBarBackgroundClick(object sender, MouseButtonEventArgs e)
     {
         if (e.OriginalSource == RootGrid)
@@ -364,6 +368,33 @@ public partial class MenuBarWindow : Window
         new("注销当前用户…", OnClick: () => ExitWindowsEx(0, 0)),
         new(string.Empty, IsSeparator: true),
         new("恢复原生任务栏并退出 GlassShell", OnClick: () => RestoreNativeTaskbarRequested?.Invoke())
+    ];
+
+    private IReadOnlyList<PopupMenuEntry> BuildWinPowerUserMenu() =>
+    [
+        new("已安装的应用", OnClick: () => LaunchUri("ms-settings:appsfeatures")),
+        new("电源选项", OnClick: () => LaunchUri("ms-settings:powersleep")),
+        new("事件查看器", OnClick: () => LaunchProcess("eventvwr.msc")),
+        new("系统", OnClick: () => LaunchUri("ms-settings:about")),
+        new("设备管理器", OnClick: () => LaunchProcess("devmgmt.msc")),
+        new("网络连接", OnClick: () => LaunchProcess("ncpa.cpl")),
+        new("磁盘管理", OnClick: () => LaunchProcess("diskmgmt.msc")),
+        new("计算机管理", OnClick: () => LaunchProcess("compmgmt.msc")),
+        new("终端", OnClick: () => LaunchTerminal(asAdmin: false)),
+        new("终端 (管理员)", OnClick: () => LaunchTerminal(asAdmin: true)),
+        new(string.Empty, IsSeparator: true),
+        new("任务管理器", "Ctrl+Shift+Esc", OnClick: () => LaunchProcess("taskmgr.exe")),
+        new("设置", "Win+I", OnClick: () => LaunchUri("ms-settings:")),
+        new("文件资源管理器", "Win+E", OnClick: () => LaunchProcess("explorer.exe")),
+        new("搜索", "Win+S", OnClick: () => SendWinChord(0x53 /* S */)),
+        new("运行", "Win+R", OnClick: () => LaunchProcess("explorer.exe", "shell:::{2559a1f3-21d7-11d4-bdaf-00c04f60b9f0}")),
+        new(string.Empty, IsSeparator: true),
+        new("睡眠", OnClick: () => SetSuspendState(false, false, false)),
+        new("重新启动", OnClick: () => Process.Start(new ProcessStartInfo("shutdown", "/r /t 0") { CreateNoWindow = true, UseShellExecute = false })),
+        new("关机", OnClick: () => Process.Start(new ProcessStartInfo("shutdown", "/s /t 0") { CreateNoWindow = true, UseShellExecute = false })),
+        new("注销", OnClick: () => ExitWindowsEx(0, 0)),
+        new(string.Empty, IsSeparator: true),
+        new("桌面", "Win+D", OnClick: () => SendWinChord(0x44 /* D */))
     ];
 
     private IReadOnlyList<PopupMenuEntry> BuildActiveAppMenu() =>
@@ -718,6 +749,84 @@ public partial class MenuBarWindow : Window
     {
         try { Process.Start(new ProcessStartInfo(uri) { UseShellExecute = true }); } catch { }
     }
+
+    private static void LaunchProcess(string fileName, string? arguments = null)
+    {
+        try { Process.Start(new ProcessStartInfo(fileName, arguments ?? string.Empty) { UseShellExecute = true }); } catch { }
+    }
+
+    private static void LaunchTerminal(bool asAdmin)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo("wt.exe") { UseShellExecute = true };
+            if (asAdmin) psi.Verb = "runas";
+            Process.Start(psi);
+        }
+        catch
+        {
+            try
+            {
+                var fallback = new ProcessStartInfo("powershell.exe") { UseShellExecute = true };
+                if (asAdmin) fallback.Verb = "runas";
+                Process.Start(fallback);
+            }
+            catch { }
+        }
+    }
+
+    private static void SendWinChord(ushort vk)
+    {
+        const uint INPUT_KEYBOARD = 1;
+        const uint KEYEVENTF_KEYUP = 0x0002;
+        const ushort VK_LWIN = 0x5B;
+
+        var inputs = new INPUT[4];
+        inputs[0].type = INPUT_KEYBOARD;
+        inputs[0].u.ki.wVk = VK_LWIN;
+        inputs[1].type = INPUT_KEYBOARD;
+        inputs[1].u.ki.wVk = vk;
+        inputs[2].type = INPUT_KEYBOARD;
+        inputs[2].u.ki.wVk = vk;
+        inputs[2].u.ki.dwFlags = KEYEVENTF_KEYUP;
+        inputs[3].type = INPUT_KEYBOARD;
+        inputs[3].u.ki.wVk = VK_LWIN;
+        inputs[3].u.ki.dwFlags = KEYEVENTF_KEYUP;
+        SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>());
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct INPUT
+    {
+        public uint type;
+        public InputUnion u;
+    }
+
+    [StructLayout(LayoutKind.Explicit)]
+    private struct InputUnion
+    {
+        [FieldOffset(0)] public MOUSEINPUT mi;
+        [FieldOffset(0)] public KEYBDINPUT ki;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MOUSEINPUT
+    {
+        public int dx, dy;
+        public uint mouseData, dwFlags, time;
+        public nuint dwExtraInfo;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct KEYBDINPUT
+    {
+        public ushort wVk, wScan;
+        public uint dwFlags, time;
+        public nuint dwExtraInfo;
+    }
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
 
     protected override void OnClosed(EventArgs e)
     {

@@ -12,7 +12,11 @@
         TextOptions.TextRenderingMode="Grayscale"
         PreviewKeyDown="OnWindowPreviewKeyDown"
         PreviewMouseWheel="OnWindowPreviewMouseWheel">
-    <Grid x:Name="RootGrid" RenderTransformOrigin="0.5,0.5">
+    <Grid x:Name="RootGrid"
+          RenderTransformOrigin="0.5,0.5"
+          MouseMove="OnRootMouseMove"
+          MouseLeftButtonUp="OnRootMouseLeftButtonUp"
+          LostMouseCapture="OnRootLostMouseCapture">
         <Grid.RenderTransform>
             <ScaleTransform x:Name="RootScale" ScaleX="1.0" ScaleY="1.0" />
         </Grid.RenderTransform>
@@ -36,9 +40,9 @@
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
-            <!-- Top centered frosted pill search bar + smart filter segmented pill -->
+            <!-- Top centered frosted pill search bar + smart filter + sort + add + rescan -->
             <StackPanel Grid.Row="0" Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
-                <Border Width="264"
+                <Border Width="252"
                         Height="32"
                         CornerRadius="16"
                         Background="#2EFFFFFF"
@@ -72,7 +76,7 @@
                 </Border>
 
                 <!-- macOS frosted segmented filter: 主应用 / 全部 / 已隐藏 -->
-                <Border Margin="12,0,0,0"
+                <Border Margin="10,0,0,0"
                         Height="32"
                         CornerRadius="16"
                         Background="#28FFFFFF"
@@ -110,9 +114,9 @@
                     </StackPanel>
                 </Border>
 
-                <!-- Sort mode toggle pill (自定义 / 名称 A-Z / 名称 Z-A / 拼音) -->
+                <!-- Sort mode toggle pill (自定义 / A-Z / Z-A / 拼音) -->
                 <Button x:Name="SortModeBtn"
-                        Margin="10,0,0,0"
+                        Margin="8,0,0,0"
                         Height="32"
                         Padding="12,0"
                         FontSize="11.5"
@@ -123,7 +127,7 @@
                         BorderThickness="0.9"
                         Cursor="Hand"
                         FocusVisualStyle="{x:Null}"
-                        ToolTip="点击切换排序规则（拖拽自动重排，Ctrl+拖拽合并文件夹）"
+                        ToolTip="点击切换排序规则（直接拖拽图标即可重排，Ctrl+拖拽合并文件夹）"
                         Click="OnCycleSortModeClick">
                     <Button.Template>
                         <ControlTemplate TargetType="Button">
@@ -133,6 +137,56 @@
                         </ControlTemplate>
                     </Button.Template>
                     <TextBlock x:Name="SortModeLabel" Text="排序: 自定义" />
+                </Button>
+
+                <!-- Manual Add App pill -->
+                <Button x:Name="AddAppBtn"
+                        Margin="8,0,0,0"
+                        Height="32"
+                        Padding="12,0"
+                        FontSize="11.5"
+                        FontFamily="Microsoft YaHei UI, Segoe UI"
+                        Foreground="#F2FFFFFF"
+                        Background="#28FFFFFF"
+                        BorderBrush="#48FFFFFF"
+                        BorderThickness="0.9"
+                        Cursor="Hand"
+                        FocusVisualStyle="{x:Null}"
+                        ToolTip="手动添加本地应用程序（.exe 或 .lnk）到启动台"
+                        Click="OnAddManualAppClick">
+                    <Button.Template>
+                        <ControlTemplate TargetType="Button">
+                            <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="16" Padding="{TemplateBinding Padding}">
+                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Border>
+                        </ControlTemplate>
+                    </Button.Template>
+                    <TextBlock Text="+ 添加应用" />
+                </Button>
+
+                <!-- Rescan all Windows apps pill -->
+                <Button x:Name="RescanBtn"
+                        Margin="8,0,0,0"
+                        Height="32"
+                        Padding="11,0"
+                        FontSize="11.5"
+                        FontFamily="Microsoft YaHei UI, Segoe UI"
+                        Foreground="#F2FFFFFF"
+                        Background="#28FFFFFF"
+                        BorderBrush="#48FFFFFF"
+                        BorderThickness="0.9"
+                        Cursor="Hand"
+                        FocusVisualStyle="{x:Null}"
+                        ToolTip="重新扫描系统已安装的所有应用"
+                        Click="OnRescanClick">
+                    <Button.Template>
+                        <ControlTemplate TargetType="Button">
+                            <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="16" Padding="{TemplateBinding Padding}">
+                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Border>
+                        </ControlTemplate>
+                    </Button.Template>
+                    <TextBlock Text="↻ 刷新" />
                 </Button>
             </StackPanel>
 
@@ -152,6 +206,9 @@
                         HorizontalAlignment="Center"
                         VerticalAlignment="Center" />
         </Grid>
+
+        <!-- Pure-WPF Mouse-Capture Floating Drag Ghost Layer -->
+        <Canvas x:Name="DragOverlayCanvas" IsHitTestVisible="False" />
 
         <!-- Inline macOS Frosted Glass Folder Overlay -->
         <Grid x:Name="FolderOverlay"

@@ -26,10 +26,17 @@ public sealed class IconExtractor
             try
             {
                 var size = new SIZE { cx = targetPx, cy = targetPx };
-                hr = factory.GetImage(size, SIIGBF_BIGGERSIZEOK | SIIGBF_ICONONLY, out nint hBitmap);
+                bool isShellApp = path.StartsWith("shell:", StringComparison.OrdinalIgnoreCase);
+                hr = isShellApp
+                    ? factory.GetImage(size, SIIGBF_BIGGERSIZEOK, out nint hBitmap)
+                    : factory.GetImage(size, SIIGBF_BIGGERSIZEOK | SIIGBF_ICONONLY, out hBitmap);
                 if (hr != 0 || hBitmap == 0)
                 {
                     hr = factory.GetImage(size, SIIGBF_BIGGERSIZEOK, out hBitmap);
+                }
+                if (hr != 0 || hBitmap == 0)
+                {
+                    hr = factory.GetImage(size, 0, out hBitmap);
                 }
 
                 if (hr != 0 || hBitmap == 0) return null;

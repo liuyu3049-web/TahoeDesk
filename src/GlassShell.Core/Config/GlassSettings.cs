@@ -30,7 +30,6 @@ public sealed record GlassSettings
     public GlassOpacityPreset OpacityPreset { get; init; } = GlassOpacityPreset.Clear;
     public bool ShowMenuBarBackground { get; init; } = false;
     public bool ShowMenuBarWifiIcon { get; init; } = false;
-    public bool StageManagerEnabled { get; init; } = false;
     public int DockIconSize { get; init; } = 52;
     public bool DockMagnificationEnabled { get; init; } = true;
     public double DockMagnificationScale { get; init; } = 1.6;
