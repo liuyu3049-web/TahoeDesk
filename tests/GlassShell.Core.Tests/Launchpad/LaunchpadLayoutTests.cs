@@ -1,0 +1,93 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using GlassShell.Core.Launchpad;
+using GlassShell.Core.Search;
+using Xunit;
+
+namespace GlassShell.Core.Tests.Launchpad;
+
+public sealed class LaunchpadLayoutTests
+{
+    private static List<InstalledAppEntry> MakeApps(int count)
+    {
+        var list = new List<InstalledAppEntry>(count);
+        for (int i = 0; i < count; i++)
+        {
+            list.Add(new InstalledAppEntry($"app:{i}", $"App{i}", $@"C:\App{i}.exe", null, false, $"a{i}"));
+        }
+        return list;
+    }
+
+    [Fact]
+    public void Pagination_ComputesExact7x5PagesAndClampsIndex()
+    {
+        var mgr = new LaunchpadLayoutManager();
+        mgr.SyncWithInstalledApps(MakeApps(72));
+
+        Assert.Equal(3, mgr.PageCount);
+        Assert.Equal(35, mgr.GetPage(0).Count);
+        Assert.Equal(35, mgr.GetPage(1).Count);
+        Assert.Equal(2, mgr.GetPage(2).Count);
+        Assert.Equal(2, mgr.ClampPage(99));
+        Assert.Equal(0, mgr.ClampPage(-5));
+    }
+
+    [Fact]
+    public void Filter_MatchesFuzzyAndPinyinInitialsAcrossFolders()
+    {
+        var mgr = new LaunchpadLayoutManager();
+        mgr.SyncWithInstalledApps(
+        [
+            new("app:wx", "微信", @"C:\WeChat.exe", null, false, PinyinInitials.GetInitials("微信")),
+            new("app:qq", "QQ", @"C:\QQ.exe", null, false, "qq")
+        ]);
+        Assert.True(mgr.MergeIntoFolder("app:wx", "app:qq", "社交"));
+
+        var hits = mgr.Filter("wx");
+        Assert.Single(hits);
+        Assert.Equal("微信", hits[0].Title);
+    }
+
+    [Fact]
+    public void MergeIntoFolder_CreatesFolderAndDissolvesWhenEmptied()
+    {
+        var mgr = new LaunchpadLayoutManager();
+        mgr.SyncWithInstalledApps(MakeApps(3));
+
+        Assert.True(mgr.MergeIntoFolder("app:1", "app:0", "工具"));
+        Assert.Equal(2, mgr.Entries.Count);
+        Assert.True(mgr.Entries[0].IsFolder);
+        Assert.Equal(2, mgr.Entries[0].Children.Count);
+
+        string folderId = mgr.Entries[0].Id;
+        Assert.True(mgr.RemoveFromFolder(folderId, "app:1"));
+        // Single remaining item dissolves the folder cleanly
+        Assert.Equal(3, mgr.Entries.Count);
+        Assert.DoesNotContain(mgr.Entries, e => e.IsFolder);
+    }
+
+    [Fact]
+    public void SaveAndLoad_PreservesFolderStructureAndOrder()
+    {
+        string file = Path.Combine(Path.GetTempPath(), $"GlassShell_Launchpad_{Guid.NewGuid():N}.json");
+        try
+        {
+            var mgr = new LaunchpadLayoutManager();
+            mgr.SyncWithInstalledApps(MakeApps(4));
+            mgr.MergeIntoFolder("app:2", "app:1", "开发");
+            mgr.Save(file);
+
+            var reloaded = new LaunchpadLayoutManager();
+            reloaded.Load(file);
+            Assert.Equal(3, reloaded.Entries.Count);
+            Assert.True(reloaded.Entries[1].IsFolder);
+            Assert.Equal("开发", reloaded.Entries[1].Title);
+            Assert.Equal(2, reloaded.Entries[1].Children.Count);
+        }
+        finally
+        {
+            if (File.Exists(file)) File.Delete(file);
+        }
+    }
+}
