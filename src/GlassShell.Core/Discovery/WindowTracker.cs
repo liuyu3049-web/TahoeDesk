@@ -96,8 +96,9 @@ public sealed class WindowTracker : IWindowTracker
         string procName = string.IsNullOrEmpty(exePath) ? string.Empty : Path.GetFileNameWithoutExtension(exePath);
         GetWindowRect(hwnd, out RECT rc);
         bool minimized = IsIconic(hwnd);
+        bool maximized = IsZoomed(hwnd);
         bool cloaked = IsCloaked(hwnd);
-        return new ForegroundWindowInfo(hwnd, pid, className, procName, new(rc.Left, rc.Top, rc.Right, rc.Bottom), minimized, cloaked, title);
+        return new ForegroundWindowInfo(hwnd, pid, className, procName, new(rc.Left, rc.Top, rc.Right, rc.Bottom), minimized, cloaked, title, maximized);
     }
 
     public static bool ActivateWindow(nint hwnd)
@@ -265,6 +266,10 @@ public sealed class WindowTracker : IWindowTracker
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool IsIconic(nint hwnd);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool IsZoomed(nint hwnd);
 
     [DllImport("user32.dll")]
     private static extern nint GetForegroundWindow();

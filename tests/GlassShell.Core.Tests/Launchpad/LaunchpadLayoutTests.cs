@@ -103,4 +103,35 @@ public sealed class LaunchpadLayoutTests
 
         Assert.Single(mgr.Entries);
     }
+
+    [Fact]
+    public void SmartFilter_HidesAuxiliaryToolsAndSupportsUserHideRestore()
+    {
+        var mgr = new LaunchpadLayoutManager();
+        mgr.SyncWithInstalledApps(
+        [
+            new("app:wechat", "微信", @"C:\WeChat.exe", null, false, "wx"),
+            new("app:cfg", "显卡配置工具", @"C:\Cfg.exe", null, false, "xkpzgj"),
+            new("app:lic", "Adobe License Manager", @"C:\Lic.exe", null, false, "alm")
+        ]);
+
+        // Primary hides auxiliary tools
+        var primary = mgr.GetEntriesForFilter(LaunchpadFilterMode.Primary);
+        Assert.Single(primary);
+        Assert.Equal("微信", primary[0].Title);
+
+        // All shows everything non-user-hidden
+        Assert.Equal(3, mgr.GetEntriesForFilter(LaunchpadFilterMode.All).Count);
+
+        // Hidden shows auto-filtered auxiliary tools + user-hidden apps
+        Assert.True(mgr.HideApp("app:wechat"));
+        Assert.Empty(mgr.GetEntriesForFilter(LaunchpadFilterMode.Primary));
+        Assert.Equal(3, mgr.GetEntriesForFilter(LaunchpadFilterMode.Hidden).Count);
+
+        // Restoring an app (even an auxiliary tool) brings it back into Primary
+        Assert.True(mgr.RestoreApp("app:wechat"));
+        Assert.True(mgr.RestoreApp("app:cfg"));
+        var restoredPrimary = mgr.GetEntriesForFilter(LaunchpadFilterMode.Primary);
+        Assert.Equal(2, restoredPrimary.Count);
+    }
 }

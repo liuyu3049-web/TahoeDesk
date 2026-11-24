@@ -36,6 +36,7 @@ public partial class MenuBarWindow : Window
     private readonly CalendarPopup _calendarPopup = new();
     private readonly TrayOverflowPopup _trayOverflowPopup = new();
     private readonly ControlCenterPopup _controlCenterPopup = new();
+    private readonly BatteryPopup _batteryPopup = new();
     private readonly DispatcherTimer _statusTimer;
 
     private MonitorContext _monitor;
@@ -72,6 +73,7 @@ public partial class MenuBarWindow : Window
         _trayOverflowPopup.TrayOverflowReordered += HandleTrayOverflowReordered;
         _trayOverflowPopup.NativeTaskbarPeekRequested += ToggleNativeTaskbarPeek;
         _controlCenterPopup.Closed += (_, _) => ControlCenterButton.Tag = null;
+        _batteryPopup.Closed += (_, _) => BatteryButton.Tag = null;
         _controlCenterPopup.ThemeChangeRequested += theme => SettingsUpdated?.Invoke(_settings with { Theme = theme });
         _controlCenterPopup.StageManagerToggled += enabled => SettingsUpdated?.Invoke(_settings with { StageManagerEnabled = enabled });
         ApplySettings(settings, isDarkMode);
@@ -105,6 +107,7 @@ public partial class MenuBarWindow : Window
         _calendarPopup.ConfigureVisuals(_sampler, settings.OpacityPreset, isDarkMode);
         _trayOverflowPopup.ConfigureVisuals(_sampler, settings.OpacityPreset, isDarkMode);
         _controlCenterPopup.ConfigureVisuals(_sampler, settings, isDarkMode);
+        _batteryPopup.ConfigureVisuals(_sampler, settings.OpacityPreset, isDarkMode);
         _controlCenterPopup.SetStageManagerState(settings.StageManagerEnabled);
         WifiBarButton.Visibility = settings.ShowMenuBarWifiIcon ? Visibility.Visible : Visibility.Collapsed;
         UpdateTopBarInk(settings.ShowMenuBarBackground, isDarkMode);
@@ -125,6 +128,7 @@ public partial class MenuBarWindow : Window
             _calendarPopup.IsOpen = false;
             _trayOverflowPopup.IsOpen = false;
             _controlCenterPopup.IsOpen = false;
+            _batteryPopup.IsOpen = false;
         });
     }
 
@@ -191,6 +195,7 @@ public partial class MenuBarWindow : Window
         _calendarPopup.OwnerAnchorHwnd = hwnd;
         _trayOverflowPopup.OwnerAnchorHwnd = hwnd;
         _controlCenterPopup.OwnerAnchorHwnd = hwnd;
+        _batteryPopup.OwnerAnchorHwnd = hwnd;
 
         _taskbarCreatedMsg = RegisterWindowMessageW("TaskbarCreated");
         HwndSource.FromHwnd(hwnd)?.AddHook(WndProc);
@@ -598,6 +603,26 @@ public partial class MenuBarWindow : Window
         _trayOverflowPopup.IsOpen = false;
         _controlCenterPopup.IsOpen = false;
         SpotlightRequested?.Invoke();
+    }
+
+    private void OnBatteryClick(object sender, RoutedEventArgs e)
+    {
+        _menuPopup.IsOpen = false;
+        _calendarPopup.IsOpen = false;
+        _trayOverflowPopup.IsOpen = false;
+        _controlCenterPopup.IsOpen = false;
+
+        if (_batteryPopup.IsOpen)
+        {
+            _batteryPopup.IsOpen = false;
+            return;
+        }
+
+        _batteryPopup.PlacementTarget = BatteryButton;
+        _batteryPopup.HorizontalOffset = -170;
+        _batteryPopup.VerticalOffset = 4;
+        BatteryButton.Tag = "Active";
+        _batteryPopup.IsOpen = true;
     }
 
     private void OnWifiBarClick(object sender, RoutedEventArgs e)

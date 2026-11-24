@@ -8,8 +8,8 @@ using GlassShell.Core.Search;
 namespace GlassShell.Core.Launchpad;
 
 /// <summary>
-/// Manages Launchpad's 7x5 paginated app grid, folder grouping/dissolving, reordering, search filtering,
-/// and JSON persistence under %LocalAppData%\GlassShell\launchpad.json.
+/// Manages Launchpad's 7x5 paginated app grid, smart primary-app filtering (hiding utility/config/license tools),
+/// user right-click hide/restore, folder grouping, search filtering, and JSON persistence.
 /// </summary>
 public sealed class LaunchpadLayoutManager
 {
@@ -17,20 +17,136 @@ public sealed class LaunchpadLayoutManager
     public const int Rows = 5;
     public const int ItemsPerPage = Columns * Rows; // 35
 
+    private static readonly string[] AuxiliaryKeywords =
+    [
+        "配置工具", "许可", "许可证", "授权", "激活工具", "诊断", "修复工具", "修复", "更新程序", "升级工具",
+        "安装向导", "命令行", "开发者命令", "说明文档", "使用手册", "帮助文档", "驱动程序", "卸载",
+        "license", "licensing", "config tool", "configuration", "configure", "updater", "auto update",
+        "installer", "setup wizard", "repair", "diagnostic", "diagnostics", "native tools",
+        "developer command", "developer powershell", "command prompt for", "profiler", "benchmark",
+        "maintenance", "migration", "uninstall", "readme", "manual", "documentation"
+    ];
+
+    private sealed class PersistedState
+    {
+        public List<LaunchpadEntry> Entries { get; set; } = [];
+        public List<string> HiddenAppIds { get; set; } = [];
+        public List<string> ForceShownAppIds { get; set; } = [];
+    }
+
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
     private readonly List<LaunchpadEntry> _entries = [];
+    private readonly HashSet<string> _hiddenIds = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _forceShownIds = new(StringComparer.OrdinalIgnoreCase);
 
     public IReadOnlyList<LaunchpadEntry> Entries => _entries;
+    public IReadOnlyCollection<string> HiddenAppIds => _hiddenIds;
 
-    public int PageCount => Math.Max(1, (int)Math.Ceiling(_entries.Count / (double)ItemsPerPage));
-
-    public int ClampPage(int pageIndex) => Math.Clamp(pageIndex, 0, PageCount - 1);
-
-    public IReadOnlyList<LaunchpadEntry> GetPage(int pageIndex)
+    public static bool IsAuxiliaryUtility(string title)
     {
-        if (_entries.Count == 0) return [];
-        int safe = ClampPage(pageIndex);
-        return _entries.Skip(safe * ItemsPerPage).Take(ItemsPerPage).ToList();
+        if (string.IsNullOrWhiteSpace(title)) return false;
+        foreach (string kw in AuxiliaryKeywords)
+        {
+            if (title.Contains(kw, StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    public bool IsEntryHidden(LaunchpadEntry entry)
+    {
+        if (entry.IsFolder) return false;
+        return _hiddenIds.Contains(entry.Id);
+    }
+
+    public IReadOnlyList<LaunchpadEntry> GetEntriesForFilter(LaunchpadFilterMode mode)
+    {
+        if (mode == LaunchpadFilterMode.Hidden)
+        {
+            var hiddenList = new List<LaunchpadEntry>();
+            foreach (var entry in _entries)
+            {
+                if (entry.IsFolder)
+                {
+                    foreach (var c in entry.Children)
+                    {
+                        if (_hiddenIds.Contains(c.Id) || (IsAuxiliaryUtility(c.Title) && !_forceShownIds.Contains(c.Id)))
+                        {
+                            hiddenList.Add(c);
+                        }
+                    }
+                }
+                else if (_hiddenIds.Contains(entry.Id) || (IsAuxiliaryUtility(entry.Title) && !_forceShownIds.Contains(entry.Id)))
+                {
+                    hiddenList.Add(entry);
+                }
+            }
+            return hiddenList;
+        }
+
+        var visible = new List<LaunchpadEntry>();
+        foreach (var entry in _entries)
+        {
+            if (entry.IsFolder)
+            {
+                var visibleChildren = entry.Children.Where(c => IsVisibleInMode(c, mode)).ToList();
+                if (visibleChildren.Count > 0)
+                {
+                    visible.Add(entry with { Children = visibleChildren });
+                }
+            }
+            else if (IsVisibleInMode(entry, mode))
+            {
+                visible.Add(entry);
+            }
+        }
+        return visible;
+    }
+
+    private bool IsVisibleInMode(LaunchpadEntry entry, LaunchpadFilterMode mode)
+    {
+        if (_hiddenIds.Contains(entry.Id)) return false;
+        if (mode == LaunchpadFilterMode.Primary && IsAuxiliaryUtility(entry.Title) && !_forceShownIds.Contains(entry.Id))
+        {
+            return false;
+        }
+        return true;
+    }
+
+    public int PageCount => GetPageCount(LaunchpadFilterMode.All);
+
+    public int GetPageCount(LaunchpadFilterMode mode)
+    {
+        int count = GetEntriesForFilter(mode).Count;
+        return Math.Max(1, (int)Math.Ceiling(count / (double)ItemsPerPage));
+    }
+
+    public int ClampPage(int pageIndex, LaunchpadFilterMode mode = LaunchpadFilterMode.All)
+        => Math.Clamp(pageIndex, 0, GetPageCount(mode) - 1);
+
+    public IReadOnlyList<LaunchpadEntry> GetPage(int pageIndex, LaunchpadFilterMode mode = LaunchpadFilterMode.All)
+    {
+        var items = GetEntriesForFilter(mode);
+        if (items.Count == 0) return [];
+        int safe = Math.Clamp(pageIndex, 0, Math.Max(0, GetPageCount(mode) - 1));
+        return items.Skip(safe * ItemsPerPage).Take(ItemsPerPage).ToList();
+    }
+
+    public bool HideApp(string appId)
+    {
+        if (string.IsNullOrWhiteSpace(appId)) return false;
+        _forceShownIds.Remove(appId);
+        return _hiddenIds.Add(appId);
+    }
+
+    public bool RestoreApp(string appId)
+    {
+        if (string.IsNullOrWhiteSpace(appId)) return false;
+        bool removed = _hiddenIds.Remove(appId);
+        bool forced = _forceShownIds.Add(appId);
+        return removed || forced;
     }
 
     public void SyncWithInstalledApps(IReadOnlyList<InstalledAppEntry> installed)
@@ -86,12 +202,13 @@ public sealed class LaunchpadLayoutManager
         _entries.AddRange(synced);
     }
 
-    public IReadOnlyList<LaunchpadEntry> Filter(string query)
+    public IReadOnlyList<LaunchpadEntry> Filter(string query, LaunchpadFilterMode mode = LaunchpadFilterMode.All)
     {
-        if (string.IsNullOrWhiteSpace(query)) return _entries.ToList();
+        var scope = GetEntriesForFilter(mode);
+        if (string.IsNullOrWhiteSpace(query)) return scope;
 
         var matches = new List<(LaunchpadEntry Entry, int Score)>();
-        foreach (var entry in _entries)
+        foreach (var entry in scope)
         {
             if (entry.IsFolder)
             {
@@ -184,7 +301,6 @@ public sealed class LaunchpadLayoutManager
         }
         else if (remaining.Count == 1)
         {
-            // Dissolve single-item folder cleanly back into the app icon (macOS Launchpad behavior)
             _entries[folderIdx] = remaining[0];
         }
         else
@@ -202,7 +318,13 @@ public sealed class LaunchpadLayoutManager
         {
             string? dir = Path.GetDirectoryName(filePath);
             if (!string.IsNullOrWhiteSpace(dir)) Directory.CreateDirectory(dir);
-            File.WriteAllText(filePath, JsonSerializer.Serialize(_entries, JsonOptions));
+            var state = new PersistedState
+            {
+                Entries = _entries,
+                HiddenAppIds = _hiddenIds.ToList(),
+                ForceShownAppIds = _forceShownIds.ToList()
+            };
+            File.WriteAllText(filePath, JsonSerializer.Serialize(state, JsonOptions));
         }
         catch { }
     }
@@ -212,11 +334,28 @@ public sealed class LaunchpadLayoutManager
         try
         {
             if (!File.Exists(filePath)) return;
-            var loaded = JsonSerializer.Deserialize<List<LaunchpadEntry>>(File.ReadAllText(filePath));
-            if (loaded is not null)
+            string json = File.ReadAllText(filePath).TrimStart();
+            if (json.StartsWith('['))
+            {
+                // Backward compatibility with v1 array format
+                var legacy = JsonSerializer.Deserialize<List<LaunchpadEntry>>(json);
+                if (legacy is not null)
+                {
+                    _entries.Clear();
+                    _entries.AddRange(legacy);
+                }
+                return;
+            }
+
+            var state = JsonSerializer.Deserialize<PersistedState>(json);
+            if (state is not null)
             {
                 _entries.Clear();
-                _entries.AddRange(loaded);
+                _entries.AddRange(state.Entries);
+                _hiddenIds.Clear();
+                foreach (var id in state.HiddenAppIds) _hiddenIds.Add(id);
+                _forceShownIds.Clear();
+                foreach (var id in state.ForceShownAppIds) _forceShownIds.Add(id);
             }
         }
         catch { }

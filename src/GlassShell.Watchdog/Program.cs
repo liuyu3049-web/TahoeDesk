@@ -96,6 +96,10 @@ internal static class Program
             secondary = FindWindowExW(0, secondary, "Shell_SecondaryTrayWnd", null);
         }
 
+        // Restore native Windows minimize animation in case GlassShell exited uncleanly while suppressing top-left ghost
+        var anim = new ANIMATIONINFO { cbSize = (uint)Marshal.SizeOf<ANIMATIONINFO>(), iMinAnimate = 1 };
+        SystemParametersInfoW(0x0049 /* SPI_SETANIMATION */, anim.cbSize, ref anim, 0);
+
         // Ask all running tray apps to re-register their icons back onto Explorer's native taskbar
         uint msg = RegisterWindowMessageW("TaskbarCreated");
         if (msg != 0)
@@ -126,6 +130,17 @@ internal static class Program
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool ShowWindow(nint hWnd, int nCmdShow);
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ANIMATIONINFO
+    {
+        public uint cbSize;
+        public int iMinAnimate;
+    }
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SystemParametersInfoW(uint uiAction, uint uiParam, ref ANIMATIONINFO pvParam, uint fWinIni);
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern uint RegisterWindowMessageW(string lpString);

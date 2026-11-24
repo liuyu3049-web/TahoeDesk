@@ -45,6 +45,7 @@ public partial class LaunchpadWindow : Window
     private readonly string _layoutPath;
 
     private int _currentPage;
+    private LaunchpadFilterMode _filterMode = LaunchpadFilterMode.Primary;
     private string? _openFolderId;
     private string? _draggingEntryId;
     private Point _dragStart;
@@ -148,9 +149,10 @@ public partial class LaunchpadWindow : Window
         PageDotsPanel.Children.Clear();
 
         string query = SearchBox.Text.Trim();
+        _currentPage = _layout.ClampPage(_currentPage, _filterMode);
         IReadOnlyList<LaunchpadEntry> pageItems = string.IsNullOrEmpty(query)
-            ? _layout.GetPage(_currentPage)
-            : _layout.Filter(query).Take(LaunchpadLayoutManager.ItemsPerPage).ToList();
+            ? _layout.GetPage(_currentPage, _filterMode)
+            : _layout.Filter(query, _filterMode).Take(LaunchpadLayoutManager.ItemsPerPage).ToList();
 
         var pendingAsyncLoads = new List<(string Path, Image Target)>();
 
@@ -180,7 +182,7 @@ public partial class LaunchpadWindow : Window
 
         if (string.IsNullOrEmpty(query))
         {
-            int count = _layout.PageCount;
+            int count = _layout.GetPageCount(_filterMode);
             for (int p = 0; p < count; p++)
             {
                 int pageIdx = p;
@@ -344,6 +346,37 @@ public partial class LaunchpadWindow : Window
                 }
             };
         }
+        else if (!entry.IsFolder)
+        {
+            var ctx = new ContextMenu();
+            if (_filterMode == LaunchpadFilterMode.Hidden)
+            {
+                var restoreItem = new MenuItem { Header = "取消隐藏（恢复显示）" };
+                restoreItem.Click += (_, _) =>
+                {
+                    if (_layout.RestoreApp(entry.Id))
+                    {
+                        _layout.Save(_layoutPath);
+                        RenderCurrentView();
+                    }
+                };
+                ctx.Items.Add(restoreItem);
+            }
+            else
+            {
+                var hideItem = new MenuItem { Header = "在启动台中隐藏此应用" };
+                hideItem.Click += (_, _) =>
+                {
+                    if (_layout.HideApp(entry.Id))
+                    {
+                        _layout.Save(_layoutPath);
+                        RenderCurrentView();
+                    }
+                };
+                ctx.Items.Add(hideItem);
+            }
+            tile.ContextMenu = ctx;
+        }
 
         return tile;
     }
@@ -478,6 +511,29 @@ public partial class LaunchpadWindow : Window
         }
     }
 
+    private void OnFilterPrimaryClick(object sender, RoutedEventArgs e) => SetFilterMode(LaunchpadFilterMode.Primary);
+    private void OnFilterAllClick(object sender, RoutedEventArgs e) => SetFilterMode(LaunchpadFilterMode.All);
+    private void OnFilterHiddenClick(object sender, RoutedEventArgs e) => SetFilterMode(LaunchpadFilterMode.Hidden);
+
+    private void SetFilterMode(LaunchpadFilterMode mode)
+    {
+        _filterMode = mode;
+        _currentPage = 0;
+
+        var activeBg = new SolidColorBrush(Color.FromArgb(0x66, 0xFF, 0xFF, 0xFF));
+        var activeFg = Brushes.White;
+        var idleFg = new SolidColorBrush(Color.FromArgb(0xCC, 0xFF, 0xFF, 0xFF));
+
+        FilterPrimaryBtn.Background = mode == LaunchpadFilterMode.Primary ? activeBg : Brushes.Transparent;
+        FilterPrimaryBtn.Foreground = mode == LaunchpadFilterMode.Primary ? activeFg : idleFg;
+        FilterAllBtn.Background = mode == LaunchpadFilterMode.All ? activeBg : Brushes.Transparent;
+        FilterAllBtn.Foreground = mode == LaunchpadFilterMode.All ? activeFg : idleFg;
+        FilterHiddenBtn.Background = mode == LaunchpadFilterMode.Hidden ? activeBg : Brushes.Transparent;
+        FilterHiddenBtn.Foreground = mode == LaunchpadFilterMode.Hidden ? activeFg : idleFg;
+
+        RenderCurrentView();
+    }
+
     private void OnSearchTextChanged(object sender, TextChangedEventArgs e)
     {
         SearchPlaceholder.Visibility = string.IsNullOrEmpty(SearchBox.Text) ? Visibility.Visible : Visibility.Collapsed;
@@ -506,19 +562,19 @@ public partial class LaunchpadWindow : Window
 
         if (e.Key == Key.Left && string.IsNullOrEmpty(SearchBox.Text))
         {
-            _currentPage = _layout.ClampPage(_currentPage - 1);
+            _currentPage = _layout.ClampPage(_currentPage - 1, _filterMode);
             RenderCurrentView();
             e.Handled = true;
         }
         else if (e.Key == Key.Right && string.IsNullOrEmpty(SearchBox.Text))
         {
-            _currentPage = _layout.ClampPage(_currentPage + 1);
+            _currentPage = _layout.ClampPage(_currentPage + 1, _filterMode);
             RenderCurrentView();
             e.Handled = true;
         }
         else if (e.Key is Key.Enter or Key.Return && !string.IsNullOrWhiteSpace(SearchBox.Text))
         {
-            var first = _layout.Filter(SearchBox.Text.Trim()).FirstOrDefault(x => !x.IsFolder);
+            var first = _layout.Filter(SearchBox.Text.Trim(), _filterMode).FirstOrDefault(x => !x.IsFolder);
             if (first?.LaunchTarget is not null)
             {
                 DismissSmooth();
@@ -532,7 +588,7 @@ public partial class LaunchpadWindow : Window
     {
         if (FolderOverlay.Visibility == Visibility.Visible || !string.IsNullOrEmpty(SearchBox.Text)) return;
         int next = e.Delta < 0 ? _currentPage + 1 : _currentPage - 1;
-        int clamped = _layout.ClampPage(next);
+        int clamped = _layout.ClampPage(next, _filterMode);
         if (clamped != _currentPage)
         {
             _currentPage = clamped;

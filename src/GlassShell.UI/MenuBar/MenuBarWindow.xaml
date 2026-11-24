@@ -92,6 +92,8 @@
                 <Button x:Name="BatteryButton"
                         Style="{StaticResource MenuBarButtonStyle}"
                         Padding="6,0"
+                        ToolTip="电池与电源模式"
+                        Click="OnBatteryClick"
                         Visibility="Collapsed">
                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                         <TextBlock x:Name="BatteryPercentText" FontSize="12" Margin="0,0,4,0" VerticalAlignment="Center" Typography.NumeralAlignment="Tabular" />

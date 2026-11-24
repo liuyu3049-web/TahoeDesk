@@ -2,6 +2,13 @@ using System.Collections.Generic;
 
 namespace GlassShell.Core.Launchpad;
 
+public enum LaunchpadFilterMode
+{
+    Primary,
+    All,
+    Hidden
+}
+
 public sealed record LaunchpadEntry(
     string Id,
     string Title,

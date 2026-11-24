@@ -36,41 +36,80 @@
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
-            <!-- Top centered frosted pill search bar (authentic macOS Launchpad style) -->
-            <Border Grid.Row="0"
-                    Width="272"
-                    Height="32"
-                    HorizontalAlignment="Center"
-                    CornerRadius="16"
-                    Background="#2EFFFFFF"
-                    BorderBrush="#52FFFFFF"
-                    BorderThickness="0.9">
-                <DockPanel Margin="12,0">
-                    <TextBlock Text="⌕"
-                               FontSize="14"
-                               Foreground="#CCFFFFFF"
-                               VerticalAlignment="Center"
-                               Margin="0,0,7,1" />
-                    <Grid VerticalAlignment="Center">
-                        <TextBlock x:Name="SearchPlaceholder"
-                                   Text="搜索"
-                                   FontSize="13"
-                                   FontFamily="Microsoft YaHei UI, Segoe UI"
-                                   Foreground="#B4FFFFFF"
-                                   IsHitTestVisible="False"
-                                   VerticalAlignment="Center" />
-                        <TextBox x:Name="SearchBox"
-                                 Background="Transparent"
-                                 BorderThickness="0"
-                                 Foreground="#FAFFFFFF"
-                                 CaretBrush="#FAFFFFFF"
-                                 FontSize="13"
-                                 FontFamily="Microsoft YaHei UI, Segoe UI"
-                                 VerticalContentAlignment="Center"
-                                 TextChanged="OnSearchTextChanged" />
-                    </Grid>
-                </DockPanel>
-            </Border>
+            <!-- Top centered frosted pill search bar + smart filter segmented pill -->
+            <StackPanel Grid.Row="0" Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
+                <Border Width="264"
+                        Height="32"
+                        CornerRadius="16"
+                        Background="#2EFFFFFF"
+                        BorderBrush="#52FFFFFF"
+                        BorderThickness="0.9">
+                    <DockPanel Margin="12,0">
+                        <TextBlock Text="⌕"
+                                   FontSize="14"
+                                   Foreground="#CCFFFFFF"
+                                   VerticalAlignment="Center"
+                                   Margin="0,0,7,1" />
+                        <Grid VerticalAlignment="Center">
+                            <TextBlock x:Name="SearchPlaceholder"
+                                       Text="搜索"
+                                       FontSize="13"
+                                       FontFamily="Microsoft YaHei UI, Segoe UI"
+                                       Foreground="#B4FFFFFF"
+                                       IsHitTestVisible="False"
+                                       VerticalAlignment="Center" />
+                            <TextBox x:Name="SearchBox"
+                                     Background="Transparent"
+                                     BorderThickness="0"
+                                     Foreground="#FAFFFFFF"
+                                     CaretBrush="#FAFFFFFF"
+                                     FontSize="13"
+                                     FontFamily="Microsoft YaHei UI, Segoe UI"
+                                     VerticalContentAlignment="Center"
+                                     TextChanged="OnSearchTextChanged" />
+                        </Grid>
+                    </DockPanel>
+                </Border>
+
+                <!-- macOS frosted segmented filter: 主应用 / 全部 / 已隐藏 -->
+                <Border Margin="12,0,0,0"
+                        Height="32"
+                        CornerRadius="16"
+                        Background="#28FFFFFF"
+                        BorderBrush="#48FFFFFF"
+                        BorderThickness="0.9"
+                        Padding="3">
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <Button x:Name="FilterPrimaryBtn" Content="主应用" Height="24" Padding="11,0" Margin="0,0,2,0" FontSize="11.5" FontFamily="Microsoft YaHei UI, Segoe UI" Foreground="White" Background="#66FFFFFF" BorderThickness="0" Cursor="Hand" FocusVisualStyle="{x:Null}" Click="OnFilterPrimaryClick">
+                            <Button.Template>
+                                <ControlTemplate TargetType="Button">
+                                    <Border Background="{TemplateBinding Background}" CornerRadius="12" Padding="{TemplateBinding Padding}">
+                                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                    </Border>
+                                </ControlTemplate>
+                            </Button.Template>
+                        </Button>
+                        <Button x:Name="FilterAllBtn" Content="全部" Height="24" Padding="11,0" Margin="0,0,2,0" FontSize="11.5" FontFamily="Microsoft YaHei UI, Segoe UI" Foreground="#CCFFFFFF" Background="Transparent" BorderThickness="0" Cursor="Hand" FocusVisualStyle="{x:Null}" Click="OnFilterAllClick">
+                            <Button.Template>
+                                <ControlTemplate TargetType="Button">
+                                    <Border Background="{TemplateBinding Background}" CornerRadius="12" Padding="{TemplateBinding Padding}">
+                                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                    </Border>
+                                </ControlTemplate>
+                            </Button.Template>
+                        </Button>
+                        <Button x:Name="FilterHiddenBtn" Content="已隐藏" Height="24" Padding="11,0" FontSize="11.5" FontFamily="Microsoft YaHei UI, Segoe UI" Foreground="#CCFFFFFF" Background="Transparent" BorderThickness="0" Cursor="Hand" FocusVisualStyle="{x:Null}" Click="OnFilterHiddenClick">
+                            <Button.Template>
+                                <ControlTemplate TargetType="Button">
+                                    <Border Background="{TemplateBinding Background}" CornerRadius="12" Padding="{TemplateBinding Padding}">
+                                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                    </Border>
+                                </ControlTemplate>
+                            </Button.Template>
+                        </Button>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
 
             <!-- Authentic macOS 7x5 floating icon grid -->
             <UniformGrid x:Name="AppsGrid"

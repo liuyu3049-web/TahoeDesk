@@ -19,7 +19,7 @@ public static class WindowDockAnimator
     private const int GWL_EXSTYLE = -20;
     private const int WS_EX_TRANSPARENT = 0x00000020;
 
-    public static void PlayMinimizeToDock(BitmapSource snapshot, Rect windowRectDip, Point dockIconCenterDip)
+    public static void PlayMinimizeToDock(BitmapSource? snapshot, Rect windowRectDip, Point dockIconCenterDip)
     {
         if (windowRectDip.Width < 40 || windowRectDip.Height < 40) return;
         PlayScaleTransition(snapshot, windowRectDip, dockIconCenterDip, isRestore: false);

@@ -178,9 +178,8 @@ public partial class DockWindow : Window
 
     private void UpdateCompactWindowBounds(double maxMagnifiedCapsuleWidth)
     {
-        // Keep DockWindow compact (only as wide as max magnified Dock + small headroom)
-        // instead of full 2560px monitor width -> 3-4x faster WPF UpdateLayeredWindow compositing!
-        double targetW = Math.Min(_monitor.WidthDip, Math.Max(340, Math.Ceiling(maxMagnifiedCapsuleWidth + 80)));
+        // Keep DockWindow compact with generous 75-DIP side headroom so outermost icons' tooltips stay 100% centered
+        double targetW = Math.Min(_monitor.WidthDip, Math.Max(380, Math.Ceiling(maxMagnifiedCapsuleWidth + 150)));
         if (Math.Abs(Width - targetW) > 8.0)
         {
             Width = targetW;
@@ -702,15 +701,17 @@ public partial class DockWindow : Window
         {
             _lastTooltipText = text;
             InlineTooltipText.Text = text;
+            InlineTooltip.InvalidateMeasure();
             InlineTooltip.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
-            _cachedTooltipW = InlineTooltip.DesiredSize.Width > 0 ? InlineTooltip.DesiredSize.Width : 64;
-            _cachedTooltipH = InlineTooltip.DesiredSize.Height > 0 ? InlineTooltip.DesiredSize.Height : 28;
+            InlineTooltip.Arrange(new Rect(InlineTooltip.DesiredSize));
+            _cachedTooltipW = InlineTooltip.ActualWidth > 1 ? InlineTooltip.ActualWidth : (InlineTooltip.DesiredSize.Width > 0 ? InlineTooltip.DesiredSize.Width : 64);
+            _cachedTooltipH = InlineTooltip.ActualHeight > 1 ? InlineTooltip.ActualHeight : (InlineTooltip.DesiredSize.Height > 0 ? InlineTooltip.DesiredSize.Height : 28);
         }
 
         double targetX = Math.Clamp(iconCenterX - _cachedTooltipW * 0.5, 4, Math.Max(4, canvasW - _cachedTooltipW - 4));
         double targetY = Math.Max(2, iconTopY - _cachedTooltipH - 7.0);
-        InlineTooltipTranslate.X = targetX;
-        InlineTooltipTranslate.Y = targetY;
+        InlineTooltipTranslate.X = Math.Round(targetX);
+        InlineTooltipTranslate.Y = Math.Round(targetY);
 
         if (InlineTooltip.Opacity < 0.99)
         {
