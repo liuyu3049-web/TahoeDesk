@@ -111,7 +111,8 @@ public partial class DockWindow : Window
 
     public void ApplySettings(GlassSettings settings, bool isDarkMode)
     {
-        bool sizeChanged = _settings.DockIconSize != settings.DockIconSize;
+        bool rebuildNeeded = _settings.DockIconSize != settings.DockIconSize
+            || _settings.HarmonizeDockIcons != settings.HarmonizeDockIcons;
         _settings = settings;
         _isDarkMode = isDarkMode;
         CapsuleGlass.OpacityPreset = settings.OpacityPreset;
@@ -119,7 +120,7 @@ public partial class DockWindow : Window
         _contextMenu.ConfigureVisuals(_sampler, settings.OpacityPreset, isDarkMode);
         _folderStackPopup.ConfigureVisuals(_sampler, settings.OpacityPreset, isDarkMode);
         UpdateCapsuleHeight();
-        if (sizeChanged && _lastItems.Count > 0)
+        if (rebuildNeeded && _lastItems.Count > 0)
         {
             RebuildVisualSlots(_lastItems);
         }
@@ -348,16 +349,38 @@ public partial class DockWindow : Window
 
         if (!string.IsNullOrWhiteSpace(model.TargetPath))
         {
-            var bmp = GetOrExtractIconBitmap(model.TargetPath, 128);
-            if (bmp is not null)
+            var iconEntry = SharedIconCache.GetOrExtractWithShape(model.TargetPath, 128);
+            if (iconEntry is not null)
             {
                 var img = new Image
                 {
-                    Source = bmp,
+                    Source = iconEntry.Bitmap,
                     Stretch = Stretch.Uniform,
-                    Margin = new Thickness(3)
+                    Margin = new Thickness(_settings.HarmonizeDockIcons && iconEntry.HasTransparentCorners ? 6 : 3)
                 };
                 RenderOptions.SetBitmapScalingMode(img, BitmapScalingMode.Linear);
+
+                if (_settings.HarmonizeDockIcons && iconEntry.HasTransparentCorners)
+                {
+                    var tileBg = new LinearGradientBrush(
+                        _isDarkMode ? Color.FromArgb(0xDC, 0x3C, 0x42, 0x52) : Color.FromArgb(0xEC, 0xFF, 0xFF, 0xFF),
+                        _isDarkMode ? Color.FromArgb(0xD4, 0x24, 0x28, 0x34) : Color.FromArgb(0xE0, 0xE6, 0xEC, 0xF5),
+                        90);
+                    var tileBorder = new SolidColorBrush(_isDarkMode ? Color.FromArgb(0x55, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x40, 0x00, 0x00, 0x00));
+                    tileBg.Freeze();
+                    tileBorder.Freeze();
+
+                    return new Border
+                    {
+                        Margin = new Thickness(2.5),
+                        CornerRadius = new CornerRadius(Math.Max(10, _settings.DockIconSize * 0.225)),
+                        Background = tileBg,
+                        BorderBrush = tileBorder,
+                        BorderThickness = new Thickness(0.8),
+                        Child = img
+                    };
+                }
+
                 return img;
             }
         }
@@ -368,9 +391,6 @@ public partial class DockWindow : Window
             Margin = new Thickness(5)
         };
     }
-
-    private static BitmapSource? GetOrExtractIconBitmap(string path, int size)
-        => SharedIconCache.GetOrExtract(path, size);
 
     private UIElement BuildMinimizedWindowVisual(DockItemModel model)
     {

@@ -128,6 +128,24 @@ public sealed class DxgiBackdropSampler : IBackdropSampler
         return TryGetOutputForRect(new ScreenRect(0, 0, 1, 1), out _, out _, out _);
     }
 
+    /// <summary>
+    /// Re-enumerates DXGI desktop outputs after display hotplug, resolution/DPI change, or sleep/unlock resume.
+    /// </summary>
+    public void RefreshOutputs()
+    {
+        lock (_gate)
+        {
+            if (_disposed) return;
+            DisposeOutputsOnly();
+            if (_device is null || _context is null)
+            {
+                TryInitializeDeviceAndDuplications();
+                return;
+            }
+            TryAcquireAllOutputs();
+        }
+    }
+
     internal bool TryGetOutputForRect(
         ScreenRect surfaceRectPx,
         out ID3D11ShaderResourceView? srv,

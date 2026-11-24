@@ -10,6 +10,7 @@ using System.Windows;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using GlassShell.Core.Config;
+using GlassShell.Core.Diagnostics;
 using GlassShell.Core.Discovery;
 using GlassShell.Core.MenuEngine;
 using GlassShell.Core.Search;
@@ -52,6 +53,7 @@ public partial class App : Application
     private DispatcherTimer? _periodicRefreshTimer;
     private DispatcherTimer? _foregroundReconcileTimer;
     private DispatcherTimer? _indexRefreshTimer;
+    private DispatcherTimer? _displayRebuildDebounceTimer;
     private nint _lastForegroundHwnd;
     private string _lastForegroundTitle = string.Empty;
     private readonly LinkedList<string> _recentApps = new();
@@ -90,7 +92,10 @@ public partial class App : Application
             CleanupSafe();
             args.Handled = false;
         };
-        SystemEvents.SessionEnding += (_, _) => CleanupSafe();
+        SystemEvents.SessionEnding += OnSessionEnding;
+        SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged;
+        SystemEvents.SessionSwitch += OnSessionSwitch;
+        SystemEvents.PowerModeChanged += OnPowerModeChanged;
 
         LaunchWatchdog();
 
@@ -238,9 +243,127 @@ public partial class App : Application
         _foregroundReconcileTimer.Tick += (_, _) => ReconcileForegroundAndMonitorVisibility();
         _foregroundReconcileTimer.Start();
 
+        _displayRebuildDebounceTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(450) };
+        _displayRebuildDebounceTimer.Tick += (_, _) =>
+        {
+            _displayRebuildDebounceTimer.Stop();
+            RebuildShellsForCurrentMonitors();
+        };
+
         _indexRefreshTimer = new DispatcherTimer { Interval = TimeSpan.FromMinutes(3) };
         _indexRefreshTimer.Tick += (_, _) => _ = RefreshSearchAndLaunchpadIndexAsync();
         _indexRefreshTimer.Start();
+    }
+
+    private void OnSessionEnding(object? sender, SessionEndingEventArgs e) => CleanupSafe();
+
+    private void OnDisplaySettingsChanged(object? sender, EventArgs e) => ScheduleDisplayRebuild();
+
+    private void OnSessionSwitch(object? sender, SessionSwitchEventArgs e)
+    {
+        if (e.Reason == SessionSwitchReason.SessionUnlock)
+        {
+            ScheduleDisplayRebuild();
+        }
+    }
+
+    private void OnPowerModeChanged(object? sender, PowerModeChangedEventArgs e)
+    {
+        if (e.Mode == PowerModes.Resume)
+        {
+            ScheduleDisplayRebuild();
+        }
+    }
+
+    private void ScheduleDisplayRebuild()
+    {
+        if (_cleanedUp) return;
+        Dispatcher.BeginInvoke(() =>
+        {
+            if (_cleanedUp || _displayRebuildDebounceTimer is null) return;
+            _displayRebuildDebounceTimer.Stop();
+            _displayRebuildDebounceTimer.Start();
+        });
+    }
+
+    private void RebuildShellsForCurrentMonitors()
+    {
+        if (_cleanedUp || _taskbarController is null || _taskbarNative is null || _windowTracker is null
+            || _backdropSampler is null || _trayProxyHost is null || _hotkeyManager is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var oldPrimary = _shells.FirstOrDefault(s => s.Monitor.IsPrimary) ?? _shells.FirstOrDefault();
+            if (oldPrimary is not null)
+            {
+                _hotkeyManager.UnregisterAll();
+            }
+
+            foreach (var s in _shells)
+            {
+                if (s != oldPrimary)
+                {
+                    _taskbarNative.UnregisterAppBar(s.MenuBar.Hwnd);
+                }
+                s.MenuBar.Close();
+                s.Dock.Close();
+            }
+            _shells.Clear();
+
+            _backdropSampler.RefreshOutputs();
+
+            var monitors = MonitorContext.GetAllMonitors();
+            bool isDark = ResolveIsDarkMode(_settings);
+
+            foreach (var monitor in monitors)
+            {
+                var menuBar = new MenuBarWindow(monitor, _taskbarController, _windowTracker, _backdropSampler, _trayProxyHost, _settings, isDark, _hotkeyManager);
+                var dock = new DockWindow(monitor, _backdropSampler, _settings, isDark, _snapshotCache);
+
+                menuBar.SettingsRequested += OpenQuickSettings;
+                menuBar.SettingsUpdated += ApplyUpdatedSettings;
+                menuBar.RestoreNativeTaskbarRequested += () =>
+                {
+                    CleanupSafe();
+                    Shutdown(0);
+                };
+                menuBar.SpotlightRequested += () => ToggleSpotlight(monitor);
+                menuBar.WindowFlashDetected += hwnd => _windowTracker.MarkWindowFlashing(hwnd);
+
+                dock.LaunchpadRequested += () => ToggleLaunchpad(monitor);
+                dock.SettingsUpdated += ApplyUpdatedSettings;
+
+                menuBar.Show();
+                dock.Show();
+
+                _shells.Add(new DisplayShellPair(monitor, menuBar, dock));
+            }
+
+            var newPrimary = _shells.FirstOrDefault(s => s.Monitor.IsPrimary) ?? _shells[0];
+            _taskbarController.Acquire(newPrimary.MenuBar.Hwnd, newPrimary.Monitor, topBarDip: (int)Math.Round(newPrimary.MenuBar.Height));
+            foreach (var s in _shells)
+            {
+                if (s != newPrimary)
+                {
+                    int secHeightPx = (int)Math.Round(s.MenuBar.Height * s.Monitor.DpiScale);
+                    _taskbarNative.RegisterTopAppBar(s.MenuBar.Hwnd, secHeightPx, s.Monitor.Bounds);
+                }
+            }
+
+            _hotkeyManager.Register(newPrimary.MenuBar.Hwnd, id: 1, _settings.SpotlightHotkey, () => ToggleSpotlight(GetCursorMonitor()));
+
+            var trayItems = _trayProxyHost.GetCurrentItems();
+            foreach (var s in _shells) s.MenuBar.UpdateTrayItems(trayItems);
+            _ = RefreshDockItemsAsync();
+            OnForegroundChanged(_windowTracker.GetForegroundWindowInfo());
+        }
+        catch (Exception ex)
+        {
+            LogCrash("DisplayRebuild", ex);
+        }
     }
 
     private void ReconcileForegroundAndMonitorVisibility()
@@ -621,8 +744,35 @@ public partial class App : Application
             {
                 CleanupSafe();
                 Shutdown(0);
-            });
+            },
+            ExportDiagnosticsReport);
         _settingsWindow.Show();
+    }
+
+    private string? ExportDiagnosticsReport()
+    {
+        try
+        {
+            var monitors = _shells.Select(s => s.Monitor).ToList();
+            if (monitors.Count == 0) monitors = MonitorContext.GetAllMonitors().ToList();
+            string crashLog = Path.Combine(
+                Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+                "GlassShell",
+                "crash.log");
+            string report = DiagnosticsReportBuilder.BuildReport(
+                _settings,
+                monitors,
+                _backdropSampler?.Health ?? GlassShell.Core.Glass.SamplerHealth.FallbackDegraded,
+                crashLog);
+            string desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
+            string outPath = Path.Combine(desktop, $"GlassShell-Diagnostics-{DateTime.Now:yyyyMMdd-HHmmss}.txt");
+            File.WriteAllText(outPath, report);
+            return outPath;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private void LaunchWatchdog()
@@ -681,6 +831,11 @@ public partial class App : Application
         if (_cleanedUp) return;
         _cleanedUp = true;
 
+        try { SystemEvents.SessionEnding -= OnSessionEnding; } catch { }
+        try { SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged; } catch { }
+        try { SystemEvents.SessionSwitch -= OnSessionSwitch; } catch { }
+        try { SystemEvents.PowerModeChanged -= OnPowerModeChanged; } catch { }
+        try { _displayRebuildDebounceTimer?.Stop(); } catch { }
         try { _periodicRefreshTimer?.Stop(); } catch { }
         try { _foregroundReconcileTimer?.Stop(); } catch { }
         try { _indexRefreshTimer?.Stop(); } catch { }

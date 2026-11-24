@@ -1,9 +1,12 @@
 using System;
+using System.Diagnostics;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
 using System.Windows.Media;
 using GlassShell.Core.Config;
+using GlassShell.Core.Diagnostics;
+using GlassShell.Core.Shell;
 using GlassShell.UI.Glass;
 
 namespace GlassShell.UI.Settings;
@@ -12,6 +15,7 @@ public partial class QuickSettingsWindow : Window
 {
     private readonly Action<GlassSettings> _onUpdated;
     private readonly Action _onRestoreAndExit;
+    private readonly Func<string?>? _onExportDiagnostics;
     private GlassSettings _current;
     private bool _loading = true;
 
@@ -20,12 +24,14 @@ public partial class QuickSettingsWindow : Window
         DxgiBackdropSampler sampler,
         bool isDarkMode,
         Action<GlassSettings> onUpdated,
-        Action onRestoreAndExit)
+        Action onRestoreAndExit,
+        Func<string?>? onExportDiagnostics = null)
     {
         InitializeComponent();
         _current = settings;
         _onUpdated = onUpdated;
         _onRestoreAndExit = onRestoreAndExit;
+        _onExportDiagnostics = onExportDiagnostics;
 
         GlassBackdrop.AttachSampler(sampler);
         GlassBackdrop.OpacityPreset = settings.OpacityPreset;
@@ -38,8 +44,11 @@ public partial class QuickSettingsWindow : Window
         IconSizeSlider.Value = settings.DockIconSize;
         MagnificationCheck.IsChecked = settings.DockMagnificationEnabled;
         MagScaleSlider.Value = settings.DockMagnificationScale;
+        HarmonizeIconsCheck.IsChecked = settings.HarmonizeDockIcons;
         RecentAppsCheck.IsChecked = settings.ShowRecentApps;
         WinKeyLaunchpadCheck.IsChecked = settings.InterceptWinKeyForLaunchpad;
+        AutoStartCheck.IsChecked = AutoStartService.IsEnabled();
+        VersionFooterText.Text = $"GlassShell v{DiagnosticsReportBuilder.AppVersion} · Liquid Glass Desktop Shell";
         _loading = false;
 
         SourceInitialized += (_, _) => WindowInteropHelperEx.ExcludeFromCapture(new System.Windows.Interop.WindowInteropHelper(this).Handle);
@@ -54,15 +63,22 @@ public partial class QuickSettingsWindow : Window
     {
         GlassBackdrop.IsDarkMode = isDarkMode;
 
-        Resources["SettingsFgBrush"] = new SolidColorBrush(
+        static SolidColorBrush Frozen(Color c)
+        {
+            var b = new SolidColorBrush(c);
+            b.Freeze();
+            return b;
+        }
+
+        Resources["SettingsFgBrush"] = Frozen(
             isDarkMode ? Color.FromArgb(0xF5, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0xF0, 0x12, 0x13, 0x18));
-        Resources["SettingsSubtleBrush"] = new SolidColorBrush(
+        Resources["SettingsSubtleBrush"] = Frozen(
             isDarkMode ? Color.FromArgb(0xB0, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x9E, 0x12, 0x13, 0x18));
-        Resources["SettingsCardBgBrush"] = new SolidColorBrush(
+        Resources["SettingsCardBgBrush"] = Frozen(
             isDarkMode ? Color.FromArgb(0x28, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x99, 0xFF, 0xFF, 0xFF));
-        Resources["SettingsCardBorderBrush"] = new SolidColorBrush(
+        Resources["SettingsCardBorderBrush"] = Frozen(
             isDarkMode ? Color.FromArgb(0x22, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x26, 0x00, 0x00, 0x00));
-        Resources["SettingsCloseBgBrush"] = new SolidColorBrush(
+        Resources["SettingsCloseBgBrush"] = Frozen(
             isDarkMode ? Color.FromArgb(0x2E, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x18, 0x00, 0x00, 0x00));
     }
 
@@ -81,7 +97,6 @@ public partial class QuickSettingsWindow : Window
 
     private void OnComboDropDownOpened(object? sender, EventArgs e)
     {
-        // Prevent ComboBox popup from being captured by DXGI behind the settings glass surface
         if (sender is ComboBox combo && combo.Template?.FindName("PART_Popup", combo) is Popup popup)
         {
             WindowInteropHelperEx.ExcludeVisualFromCapture(popup.Child);
@@ -105,6 +120,7 @@ public partial class QuickSettingsWindow : Window
             DockMagnificationEnabled = MagnificationCheck.IsChecked == true,
             DockMagnificationScale = Math.Round(MagScaleSlider.Value, 2),
             DockAutoHide = autoHide,
+            HarmonizeDockIcons = HarmonizeIconsCheck.IsChecked == true,
             ShowRecentApps = RecentAppsCheck.IsChecked == true,
             InterceptWinKeyForLaunchpad = WinKeyLaunchpadCheck.IsChecked == true
         };
@@ -119,6 +135,29 @@ public partial class QuickSettingsWindow : Window
         GlassBackdrop.OpacityPreset = _current.OpacityPreset;
         ApplyWindowTheme(resolvedDark);
         _onUpdated(_current);
+    }
+
+    private void OnAutoStartChanged(object sender, RoutedEventArgs e)
+    {
+        if (_loading) return;
+        string? exePath = Environment.ProcessPath ?? Process.GetCurrentProcess().MainModule?.FileName;
+        if (!string.IsNullOrWhiteSpace(exePath))
+        {
+            AutoStartService.SetEnabled(AutoStartCheck.IsChecked == true, exePath);
+        }
+    }
+
+    private void OnExportDiagnosticsClick(object sender, RoutedEventArgs e)
+    {
+        string? savedPath = _onExportDiagnostics?.Invoke();
+        if (!string.IsNullOrWhiteSpace(savedPath))
+        {
+            DiagStatusText.Text = $"已导出至桌面：{System.IO.Path.GetFileName(savedPath)}";
+        }
+        else
+        {
+            DiagStatusText.Text = "导出失败，请重试";
+        }
     }
 
     private void OnRestoreAndExitClick(object sender, RoutedEventArgs e)

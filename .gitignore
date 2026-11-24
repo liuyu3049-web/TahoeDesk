@@ -6,4 +6,5 @@ obj/
 .superpowers/
 .tools/
 TestResults/
+dist/
 *.log
