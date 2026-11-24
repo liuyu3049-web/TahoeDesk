@@ -34,6 +34,7 @@ public sealed record GlassSettings
     public DockAutoHideMode DockAutoHide { get; init; } = DockAutoHideMode.Smart;
     public bool ShowRecentApps { get; init; } = true;
     public bool InterceptWinKeyForLaunchpad { get; init; } = true;
+    public string SpotlightHotkey { get; init; } = "Alt+Space";
     public IReadOnlyList<string> PinnedAppPaths { get; init; } = [];
     public IReadOnlyList<string> PinnedFolderPaths { get; init; } = [];
     public IReadOnlyList<string> PinnedTrayIconKeys { get; init; } = [];
