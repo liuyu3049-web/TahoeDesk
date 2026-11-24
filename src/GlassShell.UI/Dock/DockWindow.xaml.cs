@@ -36,8 +36,6 @@ public partial class DockWindow : Window
     private const double CapsuleHorizontalPadDip = 14.0;
 
     private readonly MonitorContext _monitor;
-    private readonly IconExtractor _iconExtractor = new();
-    private readonly Dictionary<string, BitmapSource?> _iconBitmapCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly RecycleBinService _recycleBinService = new();
     private readonly SpringBounceAnimator _bounceAnimator = new();
     private readonly DockHoverAnimator _hoverAnimator = new();
@@ -58,6 +56,7 @@ public partial class DockWindow : Window
     private double? _rawPointerX;
     private bool _pointerActive;
     private double _lastFrameSeconds;
+    private double _lastCursorPollMs;
     private double? _bottomEdgeEnterMs;
     private double _currentSlideY;
     private double _currentCapsuleWidth = 360;
@@ -370,26 +369,8 @@ public partial class DockWindow : Window
         };
     }
 
-    private BitmapSource? GetOrExtractIconBitmap(string path, int size)
-    {
-        string key = $"{size}|{path}";
-        if (_iconBitmapCache.TryGetValue(key, out var cached))
-        {
-            return cached;
-        }
-
-        BitmapSource? bmp = null;
-        var raw = _iconExtractor.ExtractHighResIcon(path, size);
-        if (raw is not null)
-        {
-            bmp = BitmapSource.Create(
-                raw.Width, raw.Height, 96, 96,
-                PixelFormats.Bgra32, null, raw.BgraPixels, raw.Width * 4);
-            bmp.Freeze();
-        }
-        _iconBitmapCache[key] = bmp;
-        return bmp;
-    }
+    private static BitmapSource? GetOrExtractIconBitmap(string path, int size)
+        => SharedIconCache.GetOrExtract(path, size);
 
     private UIElement BuildMinimizedWindowVisual(DockItemModel model)
     {
@@ -428,11 +409,9 @@ public partial class DockWindow : Window
 
         if (!string.IsNullOrWhiteSpace(model.TargetPath))
         {
-            var raw = _iconExtractor.ExtractHighResIcon(model.TargetPath, 48);
-            if (raw is not null)
+            var bmp = SharedIconCache.GetOrExtract(model.TargetPath, 48);
+            if (bmp is not null)
             {
-                var bmp = BitmapSource.Create(raw.Width, raw.Height, 96, 96, PixelFormats.Bgra32, null, raw.BgraPixels, raw.Width * 4);
-                bmp.Freeze();
                 var badge = new Image
                 {
                     Source = bmp,
@@ -565,6 +544,26 @@ public partial class DockWindow : Window
             LayoutFrame();
         }
 
+        // Skip GetCursorPos polling completely when Dock is stationary and visible with no auto-hide condition active!
+        bool autoHideMayEngage = _yieldForTray
+            || _currentSlideY > 0.15
+            || _settings.DockAutoHide == DockAutoHideMode.Always
+            || (_settings.DockAutoHide == DockAutoHideMode.Smart && _hasBottomOverlap);
+
+        if (!autoHideMayEngage)
+        {
+            _bottomEdgeEnterMs = null;
+            return;
+        }
+
+        double nowMs = nowSec * 1000.0;
+        // Throttle idle cursor checks to ~30Hz when Dock is tucked away; full refresh rate while sliding!
+        if (_currentSlideY > 100.0 && (nowMs - _lastCursorPollMs) < 33.0)
+        {
+            return;
+        }
+        _lastCursorPollMs = nowMs;
+
         // Auto-hide check: reveal on bottom-edge hover, and hide IMMEDIATELY once cursor leaves the Dock capsule!
         bool isAtBottomEdge = false;
         double dwellMs = 0;
@@ -583,7 +582,6 @@ public partial class DockWindow : Window
             if (withinMonitorX && (nearBottom || insideRevealedDock))
             {
                 isAtBottomEdge = true;
-                double nowMs = _clock.Elapsed.TotalMilliseconds;
                 _bottomEdgeEnterMs ??= insideRevealedDock ? nowMs - DockAutoHideController.DefaultTriggerDelayMs : nowMs;
                 dwellMs = nowMs - _bottomEdgeEnterMs.Value;
             }

@@ -20,8 +20,6 @@ namespace GlassShell.UI.Spotlight;
 public partial class SpotlightWindow : Window
 {
     private readonly SpotlightSearchEngine _engine = new();
-    private readonly IconExtractor _iconExtractor = new();
-    private readonly Dictionary<string, BitmapSource?> _iconCache = new(StringComparer.OrdinalIgnoreCase);
 
     private IReadOnlyList<InstalledAppEntry> _apps = [];
     private IReadOnlyList<IndexedFileEntry> _files = [];
@@ -290,17 +288,7 @@ public partial class SpotlightWindow : Window
         string? path = item.IconPath ?? item.Payload;
         if (!string.IsNullOrWhiteSpace(path))
         {
-            if (!_iconCache.TryGetValue(path, out var bmp))
-            {
-                var raw = _iconExtractor.ExtractHighResIcon(path, 96);
-                if (raw is not null)
-                {
-                    bmp = BitmapSource.Create(raw.Width, raw.Height, 96, 96, PixelFormats.Bgra32, null, raw.BgraPixels, raw.Width * 4);
-                    bmp.Freeze();
-                }
-                _iconCache[path] = bmp;
-            }
-
+            var bmp = SharedIconCache.GetOrExtract(path, 96);
             if (bmp is not null)
             {
                 var img = new Image
@@ -310,7 +298,7 @@ public partial class SpotlightWindow : Window
                     Height = size,
                     Stretch = Stretch.Uniform
                 };
-                RenderOptions.SetBitmapScalingMode(img, BitmapScalingMode.HighQuality);
+                RenderOptions.SetBitmapScalingMode(img, BitmapScalingMode.Linear);
                 return img;
             }
         }

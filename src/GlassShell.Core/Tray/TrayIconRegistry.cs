@@ -167,6 +167,38 @@ public sealed class TrayIconRegistry
         }
     }
 
+    // Canonical Windows Shell GUIDs for built-in Power/Battery and Volume/Audio tray icons
+    private static readonly Guid SystemPowerTrayGuid = new("7820ae75-23e3-4229-82c1-e41cb67d5b9c");
+    private static readonly Guid SystemAudioTrayGuid = new("7820ae73-23e3-4229-82c1-e41cb67d5b9c");
+
+    private static readonly string[] RedundantSystemPowerAudioKeywords =
+    [
+        "扬声器", "音量", "静音", "耳机", "音频", "speakers", "volume", "headphones", "muted",
+        "电池", "电源", "电量", "已接通电源", "剩余", "充电", "battery", "power", "fully charged"
+    ];
+
+    public static bool IsRedundantSystemPowerOrAudioIcon(TrayIconRecord icon)
+    {
+        if (icon.Key.GuidItem == SystemPowerTrayGuid || icon.Key.GuidItem == SystemAudioTrayGuid)
+        {
+            return true;
+        }
+
+        if (!string.IsNullOrWhiteSpace(icon.Tooltip))
+        {
+            string tip = icon.Tooltip.Trim();
+            foreach (string kw in RedundantSystemPowerAudioKeywords)
+            {
+                if (tip.Contains(kw, StringComparison.OrdinalIgnoreCase))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
     /// <summary>
     /// Partitions visible tray icons into icons shown directly in the top Menu Bar
     /// and icons neatly tucked inside the Bartender-style Liquid Glass overflow capsule.
@@ -175,9 +207,19 @@ public sealed class TrayIconRegistry
         IReadOnlyList<TrayIconRecord> visibleIcons,
         IReadOnlyCollection<string>? pinnedKeys,
         int defaultInlineCount = 4,
-        IReadOnlyList<string>? overflowOrderKeys = null)
+        IReadOnlyList<string>? overflowOrderKeys = null,
+        bool hideSystemPowerAndAudio = true)
     {
         if (visibleIcons.Count == 0)
+        {
+            return ([], []);
+        }
+
+        var filteredIcons = hideSystemPowerAndAudio
+            ? visibleIcons.Where(i => !IsRedundantSystemPowerOrAudioIcon(i)).ToList()
+            : visibleIcons;
+
+        if (filteredIcons.Count == 0)
         {
             return ([], []);
         }
@@ -191,7 +233,7 @@ public sealed class TrayIconRegistry
 
         if (pinnedSet is not null)
         {
-            foreach (var icon in visibleIcons)
+            foreach (var icon in filteredIcons)
             {
                 if (pinnedSet.Contains(icon.PreferenceKey) || pinnedSet.Contains(icon.Key.StablePreferenceId))
                 {
@@ -206,10 +248,10 @@ public sealed class TrayIconRegistry
         else
         {
             int limit = Math.Max(0, defaultInlineCount);
-            for (int i = 0; i < visibleIcons.Count; i++)
+            for (int i = 0; i < filteredIcons.Count; i++)
             {
-                if (i < limit) bar.Add(visibleIcons[i]);
-                else overflow.Add(visibleIcons[i]);
+                if (i < limit) bar.Add(filteredIcons[i]);
+                else overflow.Add(filteredIcons[i]);
             }
         }
 

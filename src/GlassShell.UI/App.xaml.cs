@@ -234,7 +234,7 @@ public partial class App : Application
         _periodicRefreshTimer.Tick += (_, _) => _ = RefreshDockItemsAsync();
         _periodicRefreshTimer.Start();
 
-        _foregroundReconcileTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
+        _foregroundReconcileTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(350) };
         _foregroundReconcileTimer.Tick += (_, _) => ReconcileForegroundAndMonitorVisibility();
         _foregroundReconcileTimer.Start();
 
@@ -264,7 +264,7 @@ public partial class App : Application
         if (_windowTracker is null || _taskbarNative is null || _shells.Count == 0) return;
 
         bool d3dFs = _taskbarNative.IsD3DFullscreenActive();
-        var visibleWindows = _windowTracker.GetTopLevelWindows();
+        var visibleWindows = _windowTracker.GetVisibleWindowBounds();
         bool primaryFullscreen = false;
 
         foreach (var s in _shells)
@@ -275,7 +275,6 @@ public partial class App : Application
 
             foreach (var w in visibleWindows)
             {
-                if (w.IsMinimized || w.Bounds.Width <= 40 || w.Bounds.Height <= 40) continue;
                 int cx = (w.Bounds.Left + w.Bounds.Right) / 2;
                 int cy = (w.Bounds.Top + w.Bounds.Bottom) / 2;
                 if (cx < mon.Bounds.Left || cx >= mon.Bounds.Right || cy < mon.Bounds.Top || cy >= mon.Bounds.Bottom)

@@ -15,6 +15,15 @@ public sealed class IconExtractor
         return _cache.GetOrAdd(key, _ => ExtractInternal(path, targetPx));
     }
 
+    /// <summary>
+    /// Stateless extraction without retaining raw BGRA byte buffers in memory;
+    /// preferred when the caller immediately converts to a shared frozen BitmapSource cache.
+    /// </summary>
+    public static RawIconBitmap? ExtractRaw(string path, int targetPx = 96)
+    {
+        return string.IsNullOrWhiteSpace(path) ? null : ExtractInternal(path, targetPx);
+    }
+
     private static RawIconBitmap? ExtractInternal(string path, int targetPx)
     {
         try

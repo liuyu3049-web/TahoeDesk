@@ -1,9 +1,11 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Runtime.InteropServices;
 using GlassShell.Core.Glass;
 using GlassShell.Core.Shell;
 using SharpGen.Runtime;
+using Vortice.D3DCompiler;
 using Vortice.Direct3D;
 using Vortice.Direct3D11;
 using Vortice.Direct3D9;
@@ -11,6 +13,24 @@ using Vortice.DXGI;
 using static Vortice.Direct3D11.D3D11;
 
 namespace GlassShell.UI.Glass;
+
+internal sealed class SharedGlassPipeline : IDisposable
+{
+    public required ID3D11VertexShader VertexShader { get; init; }
+    public required ID3D11PixelShader BlurHPixelShader { get; init; }
+    public required ID3D11PixelShader CompositePixelShader { get; init; }
+    public required ID3D11SamplerState LinearSampler { get; init; }
+    public required ID3D11Buffer ConstantBuffer { get; init; }
+
+    public void Dispose()
+    {
+        ConstantBuffer.Dispose();
+        LinearSampler.Dispose();
+        CompositePixelShader.Dispose();
+        BlurHPixelShader.Dispose();
+        VertexShader.Dispose();
+    }
+}
 
 public sealed class DxgiBackdropSampler : IBackdropSampler
 {
@@ -40,7 +60,56 @@ public sealed class DxgiBackdropSampler : IBackdropSampler
     private ID3D11DeviceContext? _context;
     private IDirect3D9Ex? _d3d9;
     private IDirect3DDevice9Ex? _d3d9Device;
+    private SharedGlassPipeline? _sharedPipeline;
+    private bool _pipelineInitAttempted;
     private bool _disposed;
+
+    internal SharedGlassPipeline? GetOrCreateSharedGlassPipeline(uint constantBufferByteWidth)
+    {
+        lock (_gate)
+        {
+            if (_disposed || _device is null) return null;
+            if (_sharedPipeline is not null) return _sharedPipeline;
+            if (_pipelineInitAttempted) return null;
+            _pipelineInitAttempted = true;
+
+            try
+            {
+                string shaderPath = Path.Combine(AppContext.BaseDirectory, "Glass", "Shaders", "LiquidGlass.hlsl");
+                if (!File.Exists(shaderPath)) return null;
+
+                string hlsl = File.ReadAllText(shaderPath);
+                var vsBlob = Compiler.Compile(hlsl, "VSMain", shaderPath, "vs_5_0");
+                var psBlurBlob = Compiler.Compile(hlsl, "PSBlurH", shaderPath, "ps_5_0");
+                var psCompBlob = Compiler.Compile(hlsl, "PSComposite", shaderPath, "ps_5_0");
+
+                _sharedPipeline = new SharedGlassPipeline
+                {
+                    VertexShader = _device.CreateVertexShader(vsBlob.Span),
+                    BlurHPixelShader = _device.CreatePixelShader(psBlurBlob.Span),
+                    CompositePixelShader = _device.CreatePixelShader(psCompBlob.Span),
+                    LinearSampler = _device.CreateSamplerState(new SamplerDescription
+                    {
+                        Filter = Filter.MinMagMipLinear,
+                        AddressU = TextureAddressMode.Clamp,
+                        AddressV = TextureAddressMode.Clamp,
+                        AddressW = TextureAddressMode.Clamp
+                    }),
+                    ConstantBuffer = _device.CreateBuffer(new BufferDescription
+                    {
+                        ByteWidth = constantBufferByteWidth,
+                        Usage = ResourceUsage.Default,
+                        BindFlags = BindFlags.ConstantBuffer
+                    })
+                };
+                return _sharedPipeline;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+    }
 
     public DxgiBackdropSampler()
     {
@@ -304,6 +373,8 @@ public sealed class DxgiBackdropSampler : IBackdropSampler
             if (_disposed) return;
             _disposed = true;
             DisposeOutputsOnly();
+            _sharedPipeline?.Dispose();
+            _sharedPipeline = null;
             _d3d9Device?.Dispose();
             _d3d9?.Dispose();
             _context?.Dispose();

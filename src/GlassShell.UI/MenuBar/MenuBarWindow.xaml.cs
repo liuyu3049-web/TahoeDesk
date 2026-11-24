@@ -69,7 +69,6 @@ public partial class MenuBarWindow : Window
         _settings = settings;
         DataContext = _vm;
 
-        BarGlassBackdrop.AttachSampler(sampler);
         _menuPopup.Closed += (_, _) => ClearActiveMenuButton();
         _trayOverflowPopup.Closed += (_, _) => TrayOverflowButton.Tag = null;
         _trayOverflowPopup.TrayIconInvoked += HandleTrayIconInvoked;
@@ -89,7 +88,7 @@ public partial class MenuBarWindow : Window
         _statusTimer.Tick += (_, _) => RefreshSystemStatus();
         _statusTimer.Start();
 
-        _imeTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(200) };
+        _imeTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
         _imeTimer.Tick += (_, _) => _vm.InputMethodLabel = _statusProvider.CaptureImeBadgeOnly(_vm.ActiveTargetHwnd);
         _imeTimer.Start();
 
@@ -110,7 +109,15 @@ public partial class MenuBarWindow : Window
         _vm.ApplySettings(settings, isDarkMode);
         BarGlassBackdrop.OpacityPreset = settings.OpacityPreset;
         BarGlassBackdrop.IsDarkMode = isDarkMode;
-        BarGlassBackdrop.Visibility = settings.ShowMenuBarBackground ? Visibility.Visible : Visibility.Collapsed;
+        if (settings.ShowMenuBarBackground)
+        {
+            BarGlassBackdrop.AttachSampler(_sampler);
+            BarGlassBackdrop.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            BarGlassBackdrop.Visibility = Visibility.Collapsed;
+        }
         _menuPopup.ConfigureVisuals(_sampler, settings.OpacityPreset, isDarkMode);
         _calendarPopup.ConfigureVisuals(_sampler, settings.OpacityPreset, isDarkMode);
         _trayOverflowPopup.ConfigureVisuals(_sampler, settings.OpacityPreset, isDarkMode);
@@ -145,25 +152,31 @@ public partial class MenuBarWindow : Window
             ? !isDarkMode
             : WallpaperLuminanceSampler.ShouldUseDarkInkForTopBar();
 
-        Resources["MenuBarForegroundBrush"] = new System.Windows.Media.SolidColorBrush(
+        var fgBrush = new System.Windows.Media.SolidColorBrush(
             useDarkInk
                 ? System.Windows.Media.Color.FromArgb(0xF0, 0x10, 0x11, 0x16)
                 : System.Windows.Media.Color.FromArgb(0xF8, 0xFF, 0xFF, 0xFF));
-
-        Resources["MenuBarHoverBrush"] = new System.Windows.Media.SolidColorBrush(
+        var hoverBrush = new System.Windows.Media.SolidColorBrush(
             useDarkInk
                 ? System.Windows.Media.Color.FromArgb(0x1E, 0x00, 0x00, 0x00)
                 : System.Windows.Media.Color.FromArgb(0x33, 0xFF, 0xFF, 0xFF));
-
-        Resources["MenuBarActiveBrush"] = new System.Windows.Media.SolidColorBrush(
+        var activeBrush = new System.Windows.Media.SolidColorBrush(
             useDarkInk
                 ? System.Windows.Media.Color.FromArgb(0x32, 0x00, 0x00, 0x00)
                 : System.Windows.Media.Color.FromArgb(0x4D, 0xFF, 0xFF, 0xFF));
-
-        Resources["MenuBarInverseDotBrush"] = new System.Windows.Media.SolidColorBrush(
+        var invBrush = new System.Windows.Media.SolidColorBrush(
             useDarkInk
                 ? System.Windows.Media.Color.FromRgb(0xF5, 0xF5, 0xF7)
                 : System.Windows.Media.Color.FromRgb(0x1C, 0x1C, 0x1E));
+        fgBrush.Freeze();
+        hoverBrush.Freeze();
+        activeBrush.Freeze();
+        invBrush.Freeze();
+
+        Resources["MenuBarForegroundBrush"] = fgBrush;
+        Resources["MenuBarHoverBrush"] = hoverBrush;
+        Resources["MenuBarActiveBrush"] = activeBrush;
+        Resources["MenuBarInverseDotBrush"] = invBrush;
     }
 
     private void OnUserPreferenceChanged(object? sender, Microsoft.Win32.UserPreferenceChangedEventArgs e)
@@ -367,7 +380,7 @@ public partial class MenuBarWindow : Window
         new("锁定屏幕", "Win+L", OnClick: () => LockWorkStation()),
         new("注销当前用户…", OnClick: () => ExitWindowsEx(0, 0)),
         new(string.Empty, IsSeparator: true),
-        new("恢复原生任务栏并退出 GlassShell", OnClick: () => RestoreNativeTaskbarRequested?.Invoke())
+        new("退出 GlassShell", OnClick: () => RestoreNativeTaskbarRequested?.Invoke())
     ];
 
     private IReadOnlyList<PopupMenuEntry> BuildWinPowerUserMenu() =>
@@ -833,6 +846,10 @@ public partial class MenuBarWindow : Window
         Microsoft.Win32.SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged;
         _statusTimer.Stop();
         _imeTimer.Stop();
+        if (_monitor.IsPrimary && Hwnd != 0)
+        {
+            DeregisterShellHookWindow(Hwnd);
+        }
         BarGlassBackdrop.Dispose();
         base.OnClosed(e);
     }

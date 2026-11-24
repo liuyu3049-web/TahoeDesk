@@ -25,7 +25,7 @@ public sealed class SpotlightSearchEngine
         new("cmd:empty-bin", "清倒回收站", "系统命令 · 清空回收站", "trash recycle bin qingkong hsz 清空回收站 清倒回收站"),
         new("cmd:settings", "打开 GlassShell 设置", "系统偏好设置", "settings shezhi sz 设置 偏好设置"),
         new("cmd:win-settings", "打开 Windows 设置", "系统命令 · ms-settings", "windows settings xitongshezhi 系统设置"),
-        new("cmd:restore-taskbar", "恢复原生任务栏并退出", "GlassShell 安全恢复", "restore taskbar huifu 恢复原生任务栏 退出")
+        new("cmd:restore-taskbar", "退出 GlassShell", "退出并恢复系统任务栏", "exit quit tuichu restore taskbar 退出 恢复原生任务栏")
     ];
 
     public IReadOnlyList<SpotlightResult> Search(

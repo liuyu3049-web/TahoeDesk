@@ -17,7 +17,6 @@ namespace GlassShell.UI.Dock;
 
 public partial class FolderStackPopup : Popup
 {
-    private readonly IconExtractor _iconExtractor = new();
     private readonly OutsideClickDismissHook _dismissHook;
     private string _currentFolderPath = string.Empty;
     private bool _isDarkMode = true;
@@ -134,11 +133,9 @@ public partial class FolderStackPopup : Popup
 
     private UIElement BuildFileIcon(FolderStackItem item)
     {
-        var raw = _iconExtractor.ExtractHighResIcon(item.FullPath, 64);
-        if (raw is not null)
+        var bmp = SharedIconCache.GetOrExtract(item.FullPath, 64);
+        if (bmp is not null)
         {
-            var bmp = BitmapSource.Create(raw.Width, raw.Height, 96, 96, PixelFormats.Bgra32, null, raw.BgraPixels, raw.Width * 4);
-            bmp.Freeze();
             var img = new Image
             {
                 Source = bmp,
@@ -147,7 +144,7 @@ public partial class FolderStackPopup : Popup
                 Stretch = Stretch.Uniform,
                 HorizontalAlignment = HorizontalAlignment.Center
             };
-            RenderOptions.SetBitmapScalingMode(img, BitmapScalingMode.HighQuality);
+            RenderOptions.SetBitmapScalingMode(img, BitmapScalingMode.Linear);
             return img;
         }
 

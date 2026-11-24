@@ -28,11 +28,19 @@ public sealed class SystemStatusProvider
     private const nint INPUTLANGCHANGE_FORWARD = 0x0002;
     private const uint SMTO_ABORTIFHUNG = 0x0002;
 
+    private long _lastNetworkCheckTicks;
+    private bool _cachedNetworkAvailable = true;
+
     public SystemStatusSnapshot Capture(nint foregroundHwnd = 0)
     {
         var battery = QueryBattery();
         string ime = QueryInputMethodBadge(foregroundHwnd);
-        bool network = NetworkInterface.GetIsNetworkAvailable();
+        long now = Environment.TickCount64;
+        if (now - _lastNetworkCheckTicks >= 5000 || _lastNetworkCheckTicks == 0)
+        {
+            _lastNetworkCheckTicks = now;
+            _cachedNetworkAvailable = NetworkInterface.GetIsNetworkAvailable();
+        }
         string clock = ClockFormatter.FormatMacZhCn(DateTime.Now);
 
         return new SystemStatusSnapshot(
@@ -40,7 +48,7 @@ public sealed class SystemStatusProvider
             HasBattery: battery.HasBattery,
             BatteryPercent: battery.BatteryPercent,
             IsCharging: battery.IsCharging,
-            IsNetworkConnected: network,
+            IsNetworkConnected: _cachedNetworkAvailable,
             FormattedClock: clock);
     }
 

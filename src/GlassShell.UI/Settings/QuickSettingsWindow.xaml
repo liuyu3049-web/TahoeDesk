@@ -40,7 +40,7 @@
             </DockPanel>
 
             <StackPanel DockPanel.Dock="Bottom" Margin="0,14,0,0">
-                <Button Content="恢复 Windows 原生任务栏并退出 GlassShell"
+                <Button Content="退出 GlassShell"
                         Height="34"
                         Background="#D8FF3B30"
                         Foreground="White"

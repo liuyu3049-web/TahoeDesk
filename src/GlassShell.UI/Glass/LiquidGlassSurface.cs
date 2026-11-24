@@ -38,6 +38,35 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
         DependencyProperty.Register(nameof(IsClippedBackdrop), typeof(bool), typeof(LiquidGlassSurface),
             new FrameworkPropertyMetadata(false, FrameworkPropertyMetadataOptions.AffectsRender));
 
+    private static readonly SolidColorBrush DarkOverlayFill;
+    private static readonly SolidColorBrush LightOverlayFill;
+    private static readonly SolidColorBrush DarkBarFill;
+    private static readonly SolidColorBrush LightBarFill;
+    private static readonly Pen DarkFallbackBorder;
+    private static readonly Pen LightFallbackBorder;
+
+    static LiquidGlassSurface()
+    {
+        DarkOverlayFill = new SolidColorBrush(Color.FromArgb(215, 28, 30, 38));
+        LightOverlayFill = new SolidColorBrush(Color.FromArgb(228, 246, 248, 253));
+        DarkBarFill = new SolidColorBrush(Color.FromArgb(156, 28, 30, 38));
+        LightBarFill = new SolidColorBrush(Color.FromArgb(178, 246, 248, 253));
+        DarkOverlayFill.Freeze();
+        LightOverlayFill.Freeze();
+        DarkBarFill.Freeze();
+        LightBarFill.Freeze();
+
+        var darkGrad = new LinearGradientBrush(Color.FromArgb(110, 255, 255, 255), Color.FromArgb(30, 255, 255, 255), new Point(0, 0), new Point(1, 1));
+        var lightGrad = new LinearGradientBrush(Color.FromArgb(190, 255, 255, 255), Color.FromArgb(30, 255, 255, 255), new Point(0, 0), new Point(1, 1));
+        darkGrad.Freeze();
+        lightGrad.Freeze();
+
+        DarkFallbackBorder = new Pen(darkGrad, 1.0);
+        LightFallbackBorder = new Pen(lightGrad, 1.0);
+        DarkFallbackBorder.Freeze();
+        LightFallbackBorder.Freeze();
+    }
+
     private static int _surfaceStaggerCounter;
 
     private readonly D3DImage _d3dImage = new();
@@ -47,21 +76,33 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
     private LiquidGlassRenderer? _renderer;
     private nint _boundSurfacePtr;
     private bool _hasValidFrame;
+    private bool _isHooked;
     private long _lastRenderMs = -200;
-    private const long MinBackdropRefreshIntervalMs = 66; // ~15 Hz staggered cap prevents AllowsTransparency PCIe readback stutter!
+    private const long MinBackdropRefreshIntervalMs = 66; // ~15 Hz staggered cap prevents AllowsTransparency PCIe readback stutter
 
     public LiquidGlassSurface()
     {
         _staggerOffsetMs = (System.Threading.Interlocked.Increment(ref _surfaceStaggerCounter) % 4) * 17L;
         IsHitTestVisible = false;
-        Loaded += (_, _) =>
-        {
-            CompositionTarget.Rendering -= OnRendering;
-            CompositionTarget.Rendering += OnRendering;
-        };
+        Loaded += (_, _) => SyncRenderingHook();
         Unloaded += (_, _) =>
         {
-            CompositionTarget.Rendering -= OnRendering;
+            UnhookRendering();
+            if (IsOverlayCard)
+            {
+                DetachBackBuffer();
+                _renderer?.ReleaseRenderTargets();
+            }
+        };
+        IsVisibleChanged += (_, _) =>
+        {
+            SyncRenderingHook();
+            if (!IsVisible && IsOverlayCard)
+            {
+                // Release VRAM immediately when popup/card closes (0 bytes GPU memory when idle!)
+                DetachBackBuffer();
+                _renderer?.ReleaseRenderTargets();
+            }
         };
     }
 
@@ -95,10 +136,6 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
         set => SetValue(IsOverlayCardProperty, value);
     }
 
-    /// <summary>
-    /// Optional dynamic capsule width (in DIP) rendered inside a fixed-size GPU surface
-    /// so Dock magnification animates at 120fps with ZERO GPU texture reallocations.
-    /// </summary>
     public double ActiveBoxWidth
     {
         get => (double)GetValue(ActiveBoxWidthProperty);
@@ -113,9 +150,9 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
 
     public void AttachSampler(DxgiBackdropSampler sampler)
     {
-        // Idempotent: never tear down live D3D surfaces when settings change on the same sampler!
         if (ReferenceEquals(_attachedSampler, sampler) && _renderer is not null)
         {
+            SyncRenderingHook();
             return;
         }
 
@@ -123,6 +160,31 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
         _renderer?.Dispose();
         _attachedSampler = sampler;
         _renderer = new LiquidGlassRenderer(sampler);
+        SyncRenderingHook();
+    }
+
+    private void SyncRenderingHook()
+    {
+        bool shouldHook = IsLoaded && IsVisible && _renderer is not null;
+        if (shouldHook && !_isHooked)
+        {
+            _isHooked = true;
+            _lastRenderMs = -200;
+            CompositionTarget.Rendering += OnRendering;
+        }
+        else if (!shouldHook && _isHooked)
+        {
+            UnhookRendering();
+        }
+    }
+
+    private void UnhookRendering()
+    {
+        if (_isHooked)
+        {
+            _isHooked = false;
+            CompositionTarget.Rendering -= OnRendering;
+        }
     }
 
     private void DetachBackBuffer()
@@ -150,8 +212,6 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
         if (!IsVisible || _renderer is null || ActualWidth < 4 || ActualHeight < 4) return;
         if (!_d3dImage.IsFrontBufferAvailable) return;
 
-        // Throttle DXGI backdrop capture/blur updates to staggered ~15Hz so WPF AllowsTransparency layered windows
-        // NEVER stall or pile up on the same frame doing GPU->CPU UpdateLayeredWindow readbacks!
         long nowMs = _throttleClock.ElapsedMilliseconds + _staggerOffsetMs;
         if (_hasValidFrame && (nowMs - _lastRenderMs) < MinBackdropRefreshIntervalMs)
         {
@@ -227,22 +287,17 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
 
         double pad = Math.Min(ShadowPadding, Math.Min(ActualWidth, ActualHeight) * 0.25);
         var inner = new Rect(pad, pad, Math.Max(1, ActualWidth - pad * 2), Math.Max(1, ActualHeight - pad * 2));
-        byte alpha = IsOverlayCard ? (byte)(IsDarkMode ? 215 : 228) : (byte)(IsDarkMode ? 156 : 178);
-        var fillColor = IsDarkMode
-            ? Color.FromArgb(alpha, 28, 30, 38)
-            : Color.FromArgb(alpha, 246, 248, 253);
-        var borderBrush = new LinearGradientBrush(
-            Color.FromArgb(IsDarkMode ? (byte)110 : (byte)190, 255, 255, 255),
-            Color.FromArgb(30, 255, 255, 255),
-            new Point(0, 0),
-            new Point(1, 1));
+        var fill = IsOverlayCard
+            ? (IsDarkMode ? DarkOverlayFill : LightOverlayFill)
+            : (IsDarkMode ? DarkBarFill : LightBarFill);
+        var border = IsDarkMode ? DarkFallbackBorder : LightFallbackBorder;
 
-        dc.DrawRoundedRectangle(new SolidColorBrush(fillColor), new Pen(borderBrush, 1.0), inner, CornerRadius, CornerRadius);
+        dc.DrawRoundedRectangle(fill, border, inner, CornerRadius, CornerRadius);
     }
 
     public void Dispose()
     {
-        CompositionTarget.Rendering -= OnRendering;
+        UnhookRendering();
         DetachBackBuffer();
         _renderer?.Dispose();
         _renderer = null;

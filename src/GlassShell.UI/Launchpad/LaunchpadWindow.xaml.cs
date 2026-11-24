@@ -51,8 +51,6 @@ public partial class LaunchpadWindow : Window
     }
 
     private readonly LaunchpadLayoutManager _layout = new();
-    private readonly IconExtractor _iconExtractor = new();
-    private readonly ConcurrentDictionary<string, BitmapSource?> _iconCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<(LaunchpadEntry Entry, Border Tile)> _renderedTiles = [];
     private readonly string _layoutPath;
 
@@ -95,11 +93,11 @@ public partial class LaunchpadWindow : Window
         _layout.SyncWithInstalledApps(apps);
         _currentPage = _layout.ClampPage(_currentPage, _filterMode);
 
-        // Pre-warm wallpaper blur and app icons off the UI thread so Launchpad opens in <10ms
+        // Pre-warm wallpaper blur and page-1 app icons (35 items @ 96px) off the UI thread
         _ = Task.Run(() =>
         {
             BlurredWallpaperProvider.GetBlurredWallpaper();
-            foreach (var app in _layout.ManualApps.Concat(apps).Take(90))
+            foreach (var app in _layout.ManualApps.Concat(apps).Take(LaunchpadLayoutManager.ItemsPerPage))
             {
                 string? path = app.IconPath ?? app.LaunchTarget;
                 if (!string.IsNullOrWhiteSpace(path))
@@ -644,7 +642,7 @@ public partial class LaunchpadWindow : Window
 
         if (!string.IsNullOrWhiteSpace(path))
         {
-            if (_iconCache.TryGetValue(path, out var cached))
+            if (SharedIconCache.TryGetCached(path, 96, out var cached))
             {
                 if (cached is not null)
                 {
@@ -676,17 +674,7 @@ public partial class LaunchpadWindow : Window
         };
     }
 
-    private BitmapSource? PreloadIconBitmap(string path)
-    {
-        return _iconCache.GetOrAdd(path, p =>
-        {
-            var raw = _iconExtractor.ExtractHighResIcon(p, 128);
-            if (raw is null) return null;
-            var bmp = BitmapSource.Create(raw.Width, raw.Height, 96, 96, PixelFormats.Bgra32, null, raw.BgraPixels, raw.Width * 4);
-            bmp.Freeze();
-            return bmp;
-        });
-    }
+    private static BitmapSource? PreloadIconBitmap(string path) => SharedIconCache.GetOrExtract(path, 96);
 
     private void OpenFolderOverlay(LaunchpadEntry folder)
     {
