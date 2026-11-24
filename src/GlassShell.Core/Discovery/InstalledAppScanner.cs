@@ -187,10 +187,24 @@ public static class InstalledAppScanner
 
                     bool isDirectFile = File.Exists(parsingName);
                     if (isDirectFile && IsExcludedTarget(parsingName)) continue;
-                    if (!isDirectFile && aumid.Contains("unins", StringComparison.OrdinalIgnoreCase)) continue;
+                    if (!isDirectFile)
+                    {
+                        if (aumid.Contains("unins", StringComparison.OrdinalIgnoreCase)
+                            || aumid.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+                            || aumid.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+                        {
+                            continue;
+                        }
+                    }
+
+                    string? expandedKnownPath = TryExpandKnownFolderExePath(aumid);
+                    if (expandedKnownPath is not null && seenTargets.Contains(expandedKnownPath))
+                    {
+                        continue;
+                    }
 
                     string shellPath = isDirectFile ? parsingName : $"shell:AppsFolder\\{aumid}";
-                    string dedupeKey = isDirectFile ? parsingName : aumid;
+                    string dedupeKey = isDirectFile ? parsingName : (expandedKnownPath ?? aumid);
 
                     if (!seenNames.Add(displayName) || !seenTargets.Add(dedupeKey))
                     {
@@ -323,6 +337,23 @@ public static class InstalledAppScanner
         }
 
         return false;
+    }
+
+    private static string? TryExpandKnownFolderExePath(string aumid)
+    {
+        if (aumid.StartsWith("{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\", StringComparison.OrdinalIgnoreCase))
+        {
+            return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), aumid["{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\\".Length..]);
+        }
+        if (aumid.StartsWith("{D65231B0-B2F1-4857-A4CE-A8E7C6EA7D27}\\", StringComparison.OrdinalIgnoreCase))
+        {
+            return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.SystemX86), aumid["{D65231B0-B2F1-4857-A4CE-A8E7C6EA7D27}\\".Length..]);
+        }
+        if (aumid.StartsWith("{F38BF404-1D43-42F2-9305-67DE0B28FC23}\\", StringComparison.OrdinalIgnoreCase))
+        {
+            return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Windows), aumid["{F38BF404-1D43-42F2-9305-67DE0B28FC23}\\".Length..]);
+        }
+        return null;
     }
 
     private static bool IsHardExcludedName(string name)

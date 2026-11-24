@@ -1,5 +1,4 @@
 using System;
-using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
@@ -15,6 +14,7 @@ using System.Windows.Media.Animation;
 using System.Windows.Media.Effects;
 using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
+using System.Windows.Threading;
 using GlassShell.Core.Discovery;
 using GlassShell.Core.Launchpad;
 using GlassShell.Core.Search;
@@ -28,6 +28,10 @@ public partial class LaunchpadWindow : Window
 {
     private static readonly DropShadowEffect LabelShadow;
     private static readonly DropShadowEffect GhostShadow;
+    private static readonly Geometry TinyLockGeometry;
+    private static readonly Brush LockBadgeBg;
+    private static readonly Brush LockBadgeBorder;
+    private static readonly Brush LockGlyphStroke;
 
     static LaunchpadWindow()
     {
@@ -48,10 +52,26 @@ public partial class LaunchpadWindow : Window
             Opacity = 0.55
         };
         GhostShadow.Freeze();
+
+        TinyLockGeometry = Geometry.Parse("M2.2,4.4 V3.1 C2.2,2.0 3.0,1.2 4.0,1.2 C5.0,1.2 5.8,2.0 5.8,3.1 V4.4 M1.4,4.4 H6.6 V7.8 H1.4 Z");
+        TinyLockGeometry.Freeze();
+
+        var bg = new SolidColorBrush(Color.FromArgb(0xA6, 0x16, 0x18, 0x20));
+        bg.Freeze();
+        LockBadgeBg = bg;
+
+        var border = new SolidColorBrush(Color.FromArgb(0x66, 0xFF, 0xFF, 0xFF));
+        border.Freeze();
+        LockBadgeBorder = border;
+
+        var stroke = new SolidColorBrush(Color.FromArgb(0xE0, 0xFF, 0xFF, 0xFF));
+        stroke.Freeze();
+        LockGlyphStroke = stroke;
     }
 
     private readonly LaunchpadLayoutManager _layout = new();
     private readonly List<(LaunchpadEntry Entry, Border Tile)> _renderedTiles = [];
+    private readonly DispatcherTimer _edgeFlipTimer;
     private readonly string _layoutPath;
 
     private int _currentPage;
@@ -59,10 +79,12 @@ public partial class LaunchpadWindow : Window
     private string? _openFolderId;
     private int _renderGeneration;
 
-    // Pure-WPF mouse-capture drag-to-reorder state (zero OLE DoDragDrop issues!)
+    // Pure-WPF mouse-capture drag-to-reorder state (supports cross-page drag!)
     private LaunchpadEntry? _pressEntry;
     private Border? _pressTile;
     private Point _pressStartPoint;
+    private int _dragOriginPage;
+    private int _pendingEdgeDirection; // -1 = prev page, +1 = next page, 0 = none
     private bool _isDragging;
     private Border? _dragGhost;
     private Border? _hoveredDropTile;
@@ -78,6 +100,9 @@ public partial class LaunchpadWindow : Window
             "GlassShell",
             "launchpad.json");
         _layout.Load(_layoutPath);
+
+        _edgeFlipTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(420) };
+        _edgeFlipTimer.Tick += OnEdgeFlipTick;
 
         SourceInitialized += (_, _) =>
         {
@@ -164,9 +189,23 @@ public partial class LaunchpadWindow : Window
         RootScale.BeginAnimation(ScaleTransform.ScaleYProperty, new DoubleAnimation(1.04, 1.0, dur) { EasingFunction = ease });
     }
 
-    private void RenderCurrentView()
+    private void RenderCurrentView(bool preserveDrag = false)
     {
-        CancelActiveDrag();
+        if (!preserveDrag)
+        {
+            CancelActiveDrag();
+        }
+        else
+        {
+            if (_hoveredDropTile is not null)
+            {
+                _hoveredDropTile.Background = Brushes.Transparent;
+                _hoveredDropTile.BorderBrush = Brushes.Transparent;
+            }
+            _hoveredDropTile = null;
+            _hoveredDropEntry = null;
+        }
+
         int gen = ++_renderGeneration;
         AppsGrid.Children.Clear();
         PageDotsPanel.Children.Clear();
@@ -183,6 +222,11 @@ public partial class LaunchpadWindow : Window
         foreach (var entry in pageItems)
         {
             var tile = BuildTile(entry, isInsideFolder: false, pendingAsyncLoads);
+            if (preserveDrag && _pressEntry is not null && string.Equals(entry.Id, _pressEntry.Id, StringComparison.OrdinalIgnoreCase))
+            {
+                tile.Opacity = 0.22;
+                _pressTile = tile;
+            }
             _renderedTiles.Add((entry, tile));
             AppsGrid.Children.Add(tile);
         }
@@ -231,6 +275,11 @@ public partial class LaunchpadWindow : Window
                 PageDotsPanel.Children.Add(dot);
             }
         }
+
+        if (preserveDrag && _isDragging)
+        {
+            UpdateEdgeHintsVisibility();
+        }
     }
 
     private Border BuildTile(LaunchpadEntry entry, bool isInsideFolder, List<(string Path, Image Target)>? asyncLoads)
@@ -250,23 +299,29 @@ public partial class LaunchpadWindow : Window
         };
         iconHost.Children.Add(iconVisual);
 
+        // Delicate, refined 12x12 monochrome vector lock badge at top-right (never oversized!)
         if (!isInsideFolder && _layout.IsLocked(entry.Id))
         {
             iconHost.Children.Add(new Border
             {
-                Width = 18,
-                Height = 18,
-                CornerRadius = new CornerRadius(9),
-                Background = new SolidColorBrush(Color.FromArgb(0xCC, 0x1C, 0x1E, 0x26)),
-                BorderBrush = new SolidColorBrush(Color.FromArgb(0x88, 0xFF, 0xFF, 0xFF)),
-                BorderThickness = new Thickness(0.8),
+                Width = 12,
+                Height = 12,
+                CornerRadius = new CornerRadius(6),
+                Background = LockBadgeBg,
+                BorderBrush = LockBadgeBorder,
+                BorderThickness = new Thickness(0.7),
                 HorizontalAlignment = HorizontalAlignment.Right,
                 VerticalAlignment = VerticalAlignment.Top,
-                Margin = new Thickness(0, -2, -2, 0),
-                Child = new TextBlock
+                Margin = new Thickness(0, 1, 1, 0),
+                IsHitTestVisible = false,
+                Child = new System.Windows.Shapes.Path
                 {
-                    Text = "🔒",
-                    FontSize = 9,
+                    Data = TinyLockGeometry,
+                    Stroke = LockGlyphStroke,
+                    StrokeThickness = 1.0,
+                    Width = 6.5,
+                    Height = 6.5,
+                    Stretch = Stretch.Uniform,
                     HorizontalAlignment = HorizontalAlignment.Center,
                     VerticalAlignment = VerticalAlignment.Center
                 }
@@ -307,7 +362,6 @@ public partial class LaunchpadWindow : Window
             Child = stack
         };
 
-        // Subtle macOS icon lift on hover
         tile.MouseEnter += (_, _) =>
         {
             if (_isDragging) return;
@@ -343,6 +397,7 @@ public partial class LaunchpadWindow : Window
                 _pressEntry = entry;
                 _pressTile = tile;
                 _pressStartPoint = e.GetPosition(RootGrid);
+                _dragOriginPage = _currentPage;
                 _isDragging = false;
                 RootGrid.CaptureMouse();
             };
@@ -433,7 +488,7 @@ public partial class LaunchpadWindow : Window
 
     private void OnRootMouseMove(object sender, MouseEventArgs e)
     {
-        if (_pressEntry is null || _pressTile is null) return;
+        if (_pressEntry is null) return;
         if (e.LeftButton != MouseButtonState.Pressed)
         {
             CancelActiveDrag();
@@ -457,7 +512,60 @@ public partial class LaunchpadWindow : Window
             Canvas.SetTop(_dragGhost, pos.Y - 44);
         }
 
+        CheckCrossPageEdgeHover(pos);
         UpdateDropTargetHighlight(pos);
+    }
+
+    private void CheckCrossPageEdgeHover(Point pos)
+    {
+        int pageCount = _layout.GetPageCount(_filterMode);
+        int desiredDir = 0;
+
+        if (pos.X <= 96 && _currentPage > 0)
+        {
+            desiredDir = -1;
+        }
+        else if (pos.X >= RootGrid.ActualWidth - 96 && _currentPage < pageCount - 1)
+        {
+            desiredDir = 1;
+        }
+
+        if (desiredDir != _pendingEdgeDirection)
+        {
+            _pendingEdgeDirection = desiredDir;
+            _edgeFlipTimer.Stop();
+            if (desiredDir != 0)
+            {
+                _edgeFlipTimer.Start();
+            }
+        }
+    }
+
+    private void OnEdgeFlipTick(object? sender, EventArgs e)
+    {
+        if (!_isDragging || _pendingEdgeDirection == 0)
+        {
+            _edgeFlipTimer.Stop();
+            return;
+        }
+
+        int next = _layout.ClampPage(_currentPage + _pendingEdgeDirection, _filterMode);
+        if (next != _currentPage)
+        {
+            _currentPage = next;
+            RenderCurrentView(preserveDrag: true);
+        }
+        else
+        {
+            _edgeFlipTimer.Stop();
+        }
+    }
+
+    private void UpdateEdgeHintsVisibility()
+    {
+        int pageCount = _layout.GetPageCount(_filterMode);
+        PrevPageEdgeHint.Visibility = _isDragging && _currentPage > 0 ? Visibility.Visible : Visibility.Collapsed;
+        NextPageEdgeHint.Visibility = _isDragging && _currentPage < pageCount - 1 ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private void OnRootMouseLeftButtonUp(object sender, MouseButtonEventArgs e)
@@ -467,24 +575,33 @@ public partial class LaunchpadWindow : Window
 
         var pressed = _pressEntry;
         var dropTarget = _hoveredDropEntry;
+        int originPage = _dragOriginPage;
+        int dropPage = _currentPage;
         bool wasDragging = _isDragging;
 
         CancelActiveDrag();
 
         if (wasDragging)
         {
+            bool changed = false;
             if (dropTarget is not null && !string.Equals(pressed.Id, dropTarget.Id, StringComparison.OrdinalIgnoreCase))
             {
                 bool ctrlFolder = (Keyboard.Modifiers & ModifierKeys.Control) != 0;
-                bool changed = ctrlFolder
+                changed = ctrlFolder
                     ? _layout.MergeIntoFolder(pressed.Id, dropTarget.Id)
                     : _layout.Reorder(pressed.Id, dropTarget.Id);
-                if (changed)
-                {
-                    UpdateSortLabel();
-                    _layout.Save(_layoutPath);
-                    RenderCurrentView();
-                }
+            }
+            else if (dropPage != originPage)
+            {
+                // Dropped onto blank area after flipping to another page -> move to end of that page!
+                changed = _layout.MoveToEndOfPage(pressed.Id, dropPage, _filterMode);
+            }
+
+            if (changed)
+            {
+                UpdateSortLabel();
+                _layout.Save(_layoutPath);
+                RenderCurrentView();
             }
             return;
         }
@@ -509,10 +626,10 @@ public partial class LaunchpadWindow : Window
         }
     }
 
-    private void StartVisualDrag(LaunchpadEntry entry, Border sourceTile, Point cursorPos)
+    private void StartVisualDrag(LaunchpadEntry entry, Border? sourceTile, Point cursorPos)
     {
         _isDragging = true;
-        sourceTile.Opacity = 0.22;
+        if (sourceTile is not null) sourceTile.Opacity = 0.22;
 
         UIElement ghostIcon = entry.IsFolder
             ? BuildFolderTileVisual(entry, asyncLoads: null)
@@ -532,6 +649,7 @@ public partial class LaunchpadWindow : Window
         DragOverlayCanvas.Children.Add(_dragGhost);
         Canvas.SetLeft(_dragGhost, cursorPos.X - 44);
         Canvas.SetTop(_dragGhost, cursorPos.Y - 44);
+        UpdateEdgeHintsVisibility();
     }
 
     private void UpdateDropTargetHighlight(Point cursorInRoot)
@@ -586,6 +704,11 @@ public partial class LaunchpadWindow : Window
 
     private void CancelActiveDrag()
     {
+        _edgeFlipTimer.Stop();
+        _pendingEdgeDirection = 0;
+        PrevPageEdgeHint.Visibility = Visibility.Collapsed;
+        NextPageEdgeHint.Visibility = Visibility.Collapsed;
+
         if (RootGrid.IsMouseCaptured)
         {
             RootGrid.ReleaseMouseCapture();
@@ -789,6 +912,34 @@ public partial class LaunchpadWindow : Window
         }
     }
 
+    private async void OnSyncStartMenuOrderClick(object sender, RoutedEventArgs e)
+    {
+        CancelActiveDrag();
+        SyncStartOrderBtn.IsEnabled = false;
+        Hide();
+        try
+        {
+            var pinnedNames = await StartMenuPinnedReader.CapturePinnedAppNamesAsync();
+            if (pinnedNames.Count > 0)
+            {
+                int matched = _layout.ApplyPriorityOrder(pinnedNames);
+                if (matched > 0)
+                {
+                    _currentPage = 0;
+                    _layout.Save(_layoutPath);
+                }
+            }
+        }
+        finally
+        {
+            SyncStartOrderBtn.IsEnabled = true;
+            UpdateSortLabel();
+            RenderCurrentView();
+            Show();
+            Activate();
+        }
+    }
+
     private void OnRescanClick(object sender, RoutedEventArgs e)
     {
         CancelActiveDrag();
@@ -814,6 +965,8 @@ public partial class LaunchpadWindow : Window
         var activeBg = new SolidColorBrush(Color.FromArgb(0x66, 0xFF, 0xFF, 0xFF));
         var activeFg = Brushes.White;
         var idleFg = new SolidColorBrush(Color.FromArgb(0xCC, 0xFF, 0xFF, 0xFF));
+        activeBg.Freeze();
+        idleFg.Freeze();
 
         FilterPrimaryBtn.Background = mode == LaunchpadFilterMode.Primary ? activeBg : Brushes.Transparent;
         FilterPrimaryBtn.Foreground = mode == LaunchpadFilterMode.Primary ? activeFg : idleFg;
@@ -858,13 +1011,13 @@ public partial class LaunchpadWindow : Window
         if (e.Key == Key.Left && string.IsNullOrEmpty(SearchBox.Text))
         {
             _currentPage = _layout.ClampPage(_currentPage - 1, _filterMode);
-            RenderCurrentView();
+            RenderCurrentView(preserveDrag: _isDragging);
             e.Handled = true;
         }
         else if (e.Key == Key.Right && string.IsNullOrEmpty(SearchBox.Text))
         {
             _currentPage = _layout.ClampPage(_currentPage + 1, _filterMode);
-            RenderCurrentView();
+            RenderCurrentView(preserveDrag: _isDragging);
             e.Handled = true;
         }
         else if (e.Key is Key.Enter or Key.Return && !string.IsNullOrWhiteSpace(SearchBox.Text))
@@ -887,7 +1040,8 @@ public partial class LaunchpadWindow : Window
         if (clamped != _currentPage)
         {
             _currentPage = clamped;
-            RenderCurrentView();
+            // Allow flipping pages with the scroll wheel WHILE dragging an icon across pages!
+            RenderCurrentView(preserveDrag: _isDragging);
         }
     }
 

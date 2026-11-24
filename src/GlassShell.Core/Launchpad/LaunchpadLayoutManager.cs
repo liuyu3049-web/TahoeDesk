@@ -31,6 +31,7 @@ public sealed class LaunchpadLayoutManager
         public List<LaunchpadEntry> Entries { get; set; } = [];
         public List<InstalledAppEntry> ManualApps { get; set; } = [];
         public List<string> HiddenAppIds { get; set; } = [];
+        public List<string> HiddenAppNames { get; set; } = [];
         public List<string> ForceShownAppIds { get; set; } = [];
         public List<string> LockedAppIds { get; set; } = [];
         public LaunchpadSortMode SortMode { get; set; } = LaunchpadSortMode.Custom;
@@ -40,6 +41,7 @@ public sealed class LaunchpadLayoutManager
     private readonly List<LaunchpadEntry> _entries = [];
     private readonly List<InstalledAppEntry> _manualApps = [];
     private readonly HashSet<string> _hiddenIds = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _hiddenNames = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _forceShownIds = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _lockedIds = new(StringComparer.OrdinalIgnoreCase);
 
@@ -86,6 +88,7 @@ public sealed class LaunchpadLayoutManager
         _manualApps.RemoveAll(m => string.Equals(m.Id, app.Id, StringComparison.OrdinalIgnoreCase));
         _manualApps.Add(app);
         _hiddenIds.Remove(app.Id);
+        _hiddenNames.Remove(app.Name.Trim());
         _forceShownIds.Add(app.Id);
 
         int existingIdx = _entries.FindIndex(e => string.Equals(e.Id, app.Id, StringComparison.OrdinalIgnoreCase));
@@ -135,6 +138,10 @@ public sealed class LaunchpadLayoutManager
         return true;
     }
 
+    private bool IsEntryExplicitlyHidden(LaunchpadEntry entry)
+        => _hiddenIds.Contains(entry.Id)
+           || (!string.IsNullOrWhiteSpace(entry.Title) && _hiddenNames.Contains(entry.Title.Trim()));
+
     public IReadOnlyList<LaunchpadEntry> GetEntriesForFilter(
         LaunchpadFilterMode mode,
         LaunchpadSortMode? sortOverride = null)
@@ -148,13 +155,13 @@ public sealed class LaunchpadLayoutManager
                 {
                     foreach (var c in entry.Children)
                     {
-                        if (_hiddenIds.Contains(c.Id) || (IsAuxiliaryUtility(c.Title) && !_forceShownIds.Contains(c.Id)))
+                        if (IsEntryExplicitlyHidden(c) || (IsAuxiliaryUtility(c.Title) && !_forceShownIds.Contains(c.Id)))
                         {
                             hiddenList.Add(c);
                         }
                     }
                 }
-                else if (_hiddenIds.Contains(entry.Id) || (IsAuxiliaryUtility(entry.Title) && !_forceShownIds.Contains(entry.Id)))
+                else if (IsEntryExplicitlyHidden(entry) || (IsAuxiliaryUtility(entry.Title) && !_forceShownIds.Contains(entry.Id)))
                 {
                     hiddenList.Add(entry);
                 }
@@ -210,7 +217,7 @@ public sealed class LaunchpadLayoutManager
 
     private bool IsVisibleInMode(LaunchpadEntry entry, LaunchpadFilterMode mode)
     {
-        if (_hiddenIds.Contains(entry.Id)) return false;
+        if (IsEntryExplicitlyHidden(entry)) return false;
         if (mode == LaunchpadFilterMode.Primary && IsAuxiliaryUtility(entry.Title) && !_forceShownIds.Contains(entry.Id))
         {
             return false;
@@ -241,6 +248,11 @@ public sealed class LaunchpadLayoutManager
     {
         if (string.IsNullOrWhiteSpace(appId)) return false;
         _forceShownIds.Remove(appId);
+        var entry = FindEntryById(appId);
+        if (entry is not null && !string.IsNullOrWhiteSpace(entry.Title))
+        {
+            _hiddenNames.Add(entry.Title.Trim());
+        }
         return _hiddenIds.Add(appId);
     }
 
@@ -248,8 +260,29 @@ public sealed class LaunchpadLayoutManager
     {
         if (string.IsNullOrWhiteSpace(appId)) return false;
         bool removed = _hiddenIds.Remove(appId);
+        var entry = FindEntryById(appId);
+        if (entry is not null && !string.IsNullOrWhiteSpace(entry.Title))
+        {
+            removed |= _hiddenNames.Remove(entry.Title.Trim());
+        }
         bool forced = _forceShownIds.Add(appId);
         return removed || forced;
+    }
+
+    private LaunchpadEntry? FindEntryById(string appId)
+    {
+        foreach (var e in _entries)
+        {
+            if (string.Equals(e.Id, appId, StringComparison.OrdinalIgnoreCase)) return e;
+            if (e.IsFolder)
+            {
+                foreach (var c in e.Children)
+                {
+                    if (string.Equals(c.Id, appId, StringComparison.OrdinalIgnoreCase)) return c;
+                }
+            }
+        }
+        return null;
     }
 
     public void SyncWithInstalledApps(IReadOnlyList<InstalledAppEntry> installed)
@@ -375,6 +408,72 @@ public sealed class LaunchpadLayoutManager
         return true;
     }
 
+    /// <summary>
+    /// Moves an entry to the end of a specific visible page (used when dropping onto blank space after cross-page drag).
+    /// </summary>
+    public bool MoveToEndOfPage(string sourceId, int pageIndex, LaunchpadFilterMode mode)
+    {
+        if (IsLocked(sourceId)) return false;
+        var pageItems = GetPage(pageIndex, mode);
+        if (pageItems.Count == 0) return false;
+        var lastOnPage = pageItems[^1];
+        if (string.Equals(lastOnPage.Id, sourceId, StringComparison.OrdinalIgnoreCase)) return false;
+        return Reorder(sourceId, lastOnPage.Id);
+    }
+
+    /// <summary>
+    /// Reorders Launchpad entries so items matching <paramref name="orderedAppNames"/> (e.g. from Windows 11 Start Menu Pinned list)
+    /// appear first in exact order, while strictly keeping all user-hidden apps hidden.
+    /// </summary>
+    public int ApplyPriorityOrder(IReadOnlyList<string> orderedAppNames)
+    {
+        if (orderedAppNames.Count == 0 || _entries.Count == 0) return 0;
+
+        var prioritized = new List<LaunchpadEntry>();
+        var usedIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+
+        foreach (string rawName in orderedAppNames)
+        {
+            string targetName = rawName.Trim();
+            if (string.IsNullOrEmpty(targetName)) continue;
+
+            // Exact match first, then case-insensitive prefix/contains match (skipping explicitly hidden entries!)
+            LaunchpadEntry? match = _entries.FirstOrDefault(e =>
+                !usedIds.Contains(e.Id)
+                && !IsEntryExplicitlyHidden(e)
+                && string.Equals(e.Title.Trim(), targetName, StringComparison.OrdinalIgnoreCase));
+
+            match ??= _entries.FirstOrDefault(e =>
+                !usedIds.Contains(e.Id)
+                && !IsEntryExplicitlyHidden(e)
+                && (e.Title.Contains(targetName, StringComparison.OrdinalIgnoreCase)
+                    || targetName.Contains(e.Title.Trim(), StringComparison.OrdinalIgnoreCase)));
+
+            if (match is not null)
+            {
+                usedIds.Add(match.Id);
+                prioritized.Add(match);
+            }
+        }
+
+        if (prioritized.Count == 0) return 0;
+
+        var reordered = new List<LaunchpadEntry>(_entries.Count);
+        reordered.AddRange(prioritized);
+        foreach (var e in _entries)
+        {
+            if (usedIds.Add(e.Id))
+            {
+                reordered.Add(e);
+            }
+        }
+
+        _entries.Clear();
+        _entries.AddRange(reordered);
+        SortMode = LaunchpadSortMode.Custom;
+        return prioritized.Count;
+    }
+
     public bool MergeIntoFolder(string sourceId, string targetId, string defaultFolderName = "应用文件夹")
     {
         if (string.Equals(sourceId, targetId, StringComparison.OrdinalIgnoreCase)) return false;
@@ -455,6 +554,7 @@ public sealed class LaunchpadLayoutManager
                 Entries = _entries,
                 ManualApps = _manualApps,
                 HiddenAppIds = _hiddenIds.ToList(),
+                HiddenAppNames = _hiddenNames.ToList(),
                 ForceShownAppIds = _forceShownIds.ToList(),
                 LockedAppIds = _lockedIds.ToList(),
                 SortMode = SortMode
@@ -490,6 +590,16 @@ public sealed class LaunchpadLayoutManager
                 _manualApps.AddRange(state.ManualApps);
                 _hiddenIds.Clear();
                 foreach (var id in state.HiddenAppIds) _hiddenIds.Add(id);
+                _hiddenNames.Clear();
+                foreach (var name in state.HiddenAppNames) _hiddenNames.Add(name);
+                // Backfill sticky hidden names for legacy hidden IDs so hidden apps NEVER reappear on ID shifts
+                foreach (var e in _entries)
+                {
+                    if (_hiddenIds.Contains(e.Id) && !string.IsNullOrWhiteSpace(e.Title))
+                    {
+                        _hiddenNames.Add(e.Title.Trim());
+                    }
+                }
                 _forceShownIds.Clear();
                 foreach (var id in state.ForceShownAppIds) _forceShownIds.Add(id);
                 _lockedIds.Clear();

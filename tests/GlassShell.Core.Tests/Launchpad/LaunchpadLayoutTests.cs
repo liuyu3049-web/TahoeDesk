@@ -205,4 +205,35 @@ public sealed class LaunchpadLayoutTests
             if (File.Exists(file)) File.Delete(file);
         }
     }
+
+    [Fact]
+    public void StickyHiddenNamesAndPriorityOrder_NeverUnhideHiddenAppsAndMoveAcrossPages()
+    {
+        var mgr = new LaunchpadLayoutManager();
+        var apps = MakeApps(40); // Page 0: 0..34, Page 1: 35..39
+        apps[3] = new InstalledAppEntry("app:old-hidden", "HiddenApp", @"C:\Old\Hidden.exe", null, false, "ha");
+        mgr.SyncWithInstalledApps(apps);
+
+        // Hide HiddenApp under old ID
+        Assert.True(mgr.HideApp("app:old-hidden"));
+
+        // Rescan brings same app name under a different UWP ID -> MUST remain hidden!
+        apps[3] = new InstalledAppEntry("uwp:new-hidden", "HiddenApp", "shell:AppsFolder\\Hidden", null, true, "ha");
+        mgr.SyncWithInstalledApps(apps);
+        Assert.DoesNotContain(mgr.GetEntriesForFilter(LaunchpadFilterMode.Primary), e => e.Title == "HiddenApp");
+        Assert.DoesNotContain(mgr.GetEntriesForFilter(LaunchpadFilterMode.All), e => e.Title == "HiddenApp");
+
+        // Cross-page reorder: move item from Page 1 (app:37) to Page 0 slot 0 (app:0)
+        Assert.True(mgr.Reorder("app:37", "app:0"));
+        Assert.Equal("app:37", mgr.GetPage(0, LaunchpadFilterMode.Primary)[0].Id);
+
+        // ApplyPriorityOrder puts matched apps first in exact order, while NEVER unhiding HiddenApp
+        int matched = mgr.ApplyPriorityOrder(["App39", "HiddenApp", "App38", "App10"]);
+        Assert.Equal(3, matched);
+        var page0 = mgr.GetPage(0, LaunchpadFilterMode.Primary);
+        Assert.Equal("App39", page0[0].Title);
+        Assert.Equal("App38", page0[1].Title);
+        Assert.Equal("App10", page0[2].Title);
+        Assert.DoesNotContain(page0, e => e.Title == "HiddenApp");
+    }
 }

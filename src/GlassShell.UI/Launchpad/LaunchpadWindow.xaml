@@ -21,7 +21,7 @@
             <ScaleTransform x:Name="RootScale" ScaleX="1.0" ScaleY="1.0" />
         </Grid.RenderTransform>
 
-        <!-- True macOS Launchpad blurred desktop wallpaper (100% DirectX hardware accelerated, 0 UpdateLayeredWindow lag!) -->
+        <!-- True macOS Launchpad blurred desktop wallpaper (100% DirectX hardware accelerated) -->
         <Image x:Name="WallpaperBlurImage"
                Stretch="UniformToFill"
                RenderOptions.BitmapScalingMode="Linear"
@@ -32,6 +32,43 @@
                 Background="#480E121E"
                 MouseLeftButtonDown="OnBackgroundClick" />
 
+        <!-- Cross-page drag edge indicators (visible only while dragging an icon) -->
+        <Border x:Name="PrevPageEdgeHint"
+                HorizontalAlignment="Left"
+                VerticalAlignment="Center"
+                Width="64"
+                Height="168"
+                Margin="14,0,0,0"
+                CornerRadius="22"
+                Background="#30FFFFFF"
+                BorderBrush="#66FFFFFF"
+                BorderThickness="1"
+                IsHitTestVisible="False"
+                Visibility="Collapsed">
+            <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                <TextBlock Text="‹" FontSize="28" Foreground="White" HorizontalAlignment="Center" Margin="0,-4,0,2" />
+                <TextBlock Text="上一页" FontSize="11" FontFamily="Microsoft YaHei UI, Segoe UI" Foreground="#EEFFFFFF" HorizontalAlignment="Center" />
+            </StackPanel>
+        </Border>
+
+        <Border x:Name="NextPageEdgeHint"
+                HorizontalAlignment="Right"
+                VerticalAlignment="Center"
+                Width="64"
+                Height="168"
+                Margin="0,0,14,0"
+                CornerRadius="22"
+                Background="#30FFFFFF"
+                BorderBrush="#66FFFFFF"
+                BorderThickness="1"
+                IsHitTestVisible="False"
+                Visibility="Collapsed">
+            <StackPanel VerticalAlignment="Center" HorizontalAlignment="Center">
+                <TextBlock Text="›" FontSize="28" Foreground="White" HorizontalAlignment="Center" Margin="0,-4,0,2" />
+                <TextBlock Text="下一页" FontSize="11" FontFamily="Microsoft YaHei UI, Segoe UI" Foreground="#EEFFFFFF" HorizontalAlignment="Center" />
+            </StackPanel>
+        </Border>
+
         <!-- Main macOS Launchpad Grid Layout -->
         <Grid Margin="110,44,110,36">
             <Grid.RowDefinitions>
@@ -40,9 +77,9 @@
                 <RowDefinition Height="Auto" />
             </Grid.RowDefinitions>
 
-            <!-- Top centered frosted pill search bar + smart filter + sort + add + rescan -->
+            <!-- Top centered frosted pill search bar + smart filter + sort + add + sync + rescan -->
             <StackPanel Grid.Row="0" Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
-                <Border Width="252"
+                <Border Width="236"
                         Height="32"
                         CornerRadius="16"
                         Background="#2EFFFFFF"
@@ -114,11 +151,11 @@
                     </StackPanel>
                 </Border>
 
-                <!-- Sort mode toggle pill (自定义 / A-Z / Z-A / 拼音) -->
+                <!-- Sort mode toggle pill -->
                 <Button x:Name="SortModeBtn"
                         Margin="8,0,0,0"
                         Height="32"
-                        Padding="12,0"
+                        Padding="11,0"
                         FontSize="11.5"
                         FontFamily="Microsoft YaHei UI, Segoe UI"
                         Foreground="#F2FFFFFF"
@@ -127,7 +164,7 @@
                         BorderThickness="0.9"
                         Cursor="Hand"
                         FocusVisualStyle="{x:Null}"
-                        ToolTip="点击切换排序规则（直接拖拽图标即可重排，Ctrl+拖拽合并文件夹）"
+                        ToolTip="点击切换排序规则（拖拽至屏幕左右边缘或滚动滚轮可跨页移动，Ctrl+拖拽合并文件夹）"
                         Click="OnCycleSortModeClick">
                     <Button.Template>
                         <ControlTemplate TargetType="Button">
@@ -143,7 +180,7 @@
                 <Button x:Name="AddAppBtn"
                         Margin="8,0,0,0"
                         Height="32"
-                        Padding="12,0"
+                        Padding="11,0"
                         FontSize="11.5"
                         FontFamily="Microsoft YaHei UI, Segoe UI"
                         Foreground="#F2FFFFFF"
@@ -162,6 +199,31 @@
                         </ControlTemplate>
                     </Button.Template>
                     <TextBlock Text="+ 添加应用" />
+                </Button>
+
+                <!-- Sync order from Windows 11 Start Menu Pinned Apps -->
+                <Button x:Name="SyncStartOrderBtn"
+                        Margin="8,0,0,0"
+                        Height="32"
+                        Padding="11,0"
+                        FontSize="11.5"
+                        FontFamily="Microsoft YaHei UI, Segoe UI"
+                        Foreground="#F2FFFFFF"
+                        Background="#28FFFFFF"
+                        BorderBrush="#48FFFFFF"
+                        BorderThickness="0.9"
+                        Cursor="Hand"
+                        FocusVisualStyle="{x:Null}"
+                        ToolTip="按原版 Windows 开始菜单已固定应用的顺序自动排列（保留已隐藏项）"
+                        Click="OnSyncStartMenuOrderClick">
+                    <Button.Template>
+                        <ControlTemplate TargetType="Button">
+                            <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="16" Padding="{TemplateBinding Padding}">
+                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Border>
+                        </ControlTemplate>
+                    </Button.Template>
+                    <TextBlock Text="同步开始菜单排序" />
                 </Button>
 
                 <!-- Rescan all Windows apps pill -->
