@@ -37,6 +37,7 @@ public sealed class WindowTracker : IWindowTracker
 
     public event Action? WindowsChanged;
     public event Action<ForegroundWindowInfo>? ForegroundChanged;
+    public event Action<nint>? WindowMinimizing;
     public event Action? TaskbarShownDetected;
 
     public void Start()
@@ -126,6 +127,13 @@ public sealed class WindowTracker : IWindowTracker
             {
                 TaskbarShownDetected?.Invoke();
             }
+            return;
+        }
+
+        if (eventType == EVENT_SYSTEM_MINIMIZESTART)
+        {
+            WindowMinimizing?.Invoke(hwnd);
+            WindowsChanged?.Invoke();
             return;
         }
 

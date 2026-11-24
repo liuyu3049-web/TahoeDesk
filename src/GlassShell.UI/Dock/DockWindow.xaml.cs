@@ -42,7 +42,9 @@ public partial class DockWindow : Window
     private readonly DockHoverAnimator _hoverAnimator = new();
     private readonly DockAutoHideController _autoHideController = new();
     private readonly DxgiBackdropSampler _sampler;
+    private readonly WindowSnapshotCache<BitmapSource>? _snapshotCache;
     private readonly LiquidGlassMenuPopup _contextMenu = new();
+    private readonly FolderStackPopup _folderStackPopup = new();
     private readonly Stopwatch _clock = Stopwatch.StartNew();
 
     private readonly List<DockSlotVisual> _slots = [];
@@ -72,11 +74,13 @@ public partial class DockWindow : Window
         MonitorContext monitor,
         DxgiBackdropSampler sampler,
         GlassSettings settings,
-        bool isDarkMode)
+        bool isDarkMode,
+        WindowSnapshotCache<BitmapSource>? snapshotCache = null)
     {
         InitializeComponent();
         _monitor = monitor;
         _sampler = sampler;
+        _snapshotCache = snapshotCache;
         _settings = settings;
         _isDarkMode = isDarkMode;
 
@@ -84,7 +88,13 @@ public partial class DockWindow : Window
         ApplySettings(settings, isDarkMode);
         UpdateCompactWindowBounds(360);
 
-        SourceInitialized += (_, _) => WindowInteropHelperEx.ApplyShellOverlayStyles(new WindowInteropHelper(this).Handle);
+        SourceInitialized += (_, _) =>
+        {
+            var hwnd = new WindowInteropHelper(this).Handle;
+            WindowInteropHelperEx.ApplyShellOverlayStyles(hwnd);
+            _contextMenu.OwnerAnchorHwnd = hwnd;
+            _folderStackPopup.OwnerAnchorHwnd = hwnd;
+        };
         MouseMove += OnDockMouseMove;
         MouseLeave += OnDockMouseLeave;
         DragOver += OnDockDragOver;
@@ -109,6 +119,7 @@ public partial class DockWindow : Window
         CapsuleGlass.OpacityPreset = settings.OpacityPreset;
         CapsuleGlass.IsDarkMode = isDarkMode;
         _contextMenu.ConfigureVisuals(_sampler, settings.OpacityPreset, isDarkMode);
+        _folderStackPopup.ConfigureVisuals(_sampler, settings.OpacityPreset, isDarkMode);
         UpdateCapsuleHeight();
         if (sizeChanged && _lastItems.Count > 0)
         {
@@ -119,7 +130,11 @@ public partial class DockWindow : Window
 
     public void SetYieldForTray(bool yield) => _yieldForTray = yield;
     public void SetBottomOverlap(bool overlap) => _hasBottomOverlap = overlap;
-    public void DismissPopups() => Dispatcher.InvokeAsync(() => _contextMenu.IsOpen = false);
+    public void DismissPopups() => Dispatcher.InvokeAsync(() =>
+    {
+        _contextMenu.IsOpen = false;
+        _folderStackPopup.IsOpen = false;
+    });
 
     public void UpdateItems(IReadOnlyList<DockItemModel> items)
     {
@@ -267,7 +282,7 @@ public partial class DockWindow : Window
         {
             _draggingItem = null;
             e.Handled = true;
-            HandleItemClick(model);
+            HandleItemClick(model, container);
         };
 
         container.MouseRightButtonUp += (_, e) =>
@@ -305,6 +320,7 @@ public partial class DockWindow : Window
         if (model.Kind == DockItemKind.Launchpad) return BuildLaunchpadVectorIcon();
         if (model.Kind == DockItemKind.Explorer) return BuildExplorerVectorIcon();
         if (model.Kind == DockItemKind.RecycleBin) return BuildRecycleBinVectorIcon(model.IsRecycleBinEmpty);
+        if (model.Kind == DockItemKind.MinimizedWindow) return BuildMinimizedWindowVisual(model);
 
         if (!string.IsNullOrWhiteSpace(model.TargetPath))
         {
@@ -332,6 +348,65 @@ public partial class DockWindow : Window
             Fill = new LinearGradientBrush(Color.FromRgb(0x5A, 0xC8, 0xFA), Color.FromRgb(0x0A, 0x84, 0xFF), 45),
             Margin = new Thickness(5)
         };
+    }
+
+    private UIElement BuildMinimizedWindowVisual(DockItemModel model)
+    {
+        nint hwnd = model.OpenWindowHandles.Count > 0 ? model.OpenWindowHandles[0] : 0;
+        var root = new Grid { Margin = new Thickness(3) };
+
+        if (hwnd != 0 && _snapshotCache is not null && _snapshotCache.TryGet(hwnd, out var thumb) && thumb is not null)
+        {
+            var img = new Image
+            {
+                Source = thumb,
+                Stretch = Stretch.UniformToFill
+            };
+            RenderOptions.SetBitmapScalingMode(img, BitmapScalingMode.Linear);
+
+            root.Children.Add(new Border
+            {
+                CornerRadius = new CornerRadius(6),
+                BorderBrush = new SolidColorBrush(Color.FromArgb(0x99, 0xFF, 0xFF, 0xFF)),
+                BorderThickness = new Thickness(1),
+                ClipToBounds = true,
+                Child = img
+            });
+        }
+        else
+        {
+            // Fallback glass mini-card with app icon if minimized before GlassShell started
+            root.Children.Add(new Border
+            {
+                CornerRadius = new CornerRadius(6),
+                Background = new SolidColorBrush(_isDarkMode ? Color.FromArgb(0x99, 0x26, 0x2B, 0x38) : Color.FromArgb(0xBB, 0xE8, 0xEE, 0xF7)),
+                BorderBrush = new SolidColorBrush(Color.FromArgb(0x88, 0xFF, 0xFF, 0xFF)),
+                BorderThickness = new Thickness(1)
+            });
+        }
+
+        if (!string.IsNullOrWhiteSpace(model.TargetPath))
+        {
+            var raw = _iconExtractor.ExtractHighResIcon(model.TargetPath, 48);
+            if (raw is not null)
+            {
+                var bmp = BitmapSource.Create(raw.Width, raw.Height, 96, 96, PixelFormats.Bgra32, null, raw.BgraPixels, raw.Width * 4);
+                bmp.Freeze();
+                var badge = new Image
+                {
+                    Source = bmp,
+                    Width = 18,
+                    Height = 18,
+                    HorizontalAlignment = HorizontalAlignment.Right,
+                    VerticalAlignment = VerticalAlignment.Bottom,
+                    Margin = new Thickness(0, 0, -2, -2)
+                };
+                RenderOptions.SetBitmapScalingMode(badge, BitmapScalingMode.Linear);
+                root.Children.Add(badge);
+            }
+        }
+
+        return root;
     }
 
     private static UIElement BuildExplorerVectorIcon()
@@ -476,7 +551,7 @@ public partial class DockWindow : Window
             _hasBottomOverlap,
             isPointerAtBottomEdge: isAtBottomEdge || _pointerActive,
             bottomEdgeDwellMs: _pointerActive ? DockAutoHideController.DefaultTriggerDelayMs : dwellMs,
-            isMenuOrDragActive: _contextMenu.IsOpen || _draggingItem is not null);
+            isMenuOrDragActive: _contextMenu.IsOpen || _folderStackPopup.IsOpen || _draggingItem is not null);
 
         double targetSlideY = shouldHide ? 104.0 : 0.0;
         if (Math.Abs(targetSlideY - _currentSlideY) > 0.15)
@@ -613,7 +688,7 @@ public partial class DockWindow : Window
         CapsuleHost.Height = _settings.DockIconSize + 18;
     }
 
-    private void HandleItemClick(DockItemModel model)
+    private void HandleItemClick(DockItemModel model, UIElement? anchor = null)
     {
         _bounceAnimator.TriggerBounce(model.Id, _clock.Elapsed.TotalSeconds, hops: model.IsRunning ? 1 : 2);
         _layoutDirty = true;
@@ -631,7 +706,21 @@ public partial class DockWindow : Window
                 else StartProcess("explorer.exe", "shell:MyComputerFolder");
                 return;
             case DockItemKind.Folder:
-                if (!string.IsNullOrWhiteSpace(model.TargetPath)) StartProcess("explorer.exe", model.TargetPath);
+                if (!string.IsNullOrWhiteSpace(model.TargetPath))
+                {
+                    if (anchor is not null)
+                    {
+                        HideInlineTooltip();
+                        _folderStackPopup.ShowForFolder(anchor, model.Title, model.TargetPath);
+                    }
+                    else
+                    {
+                        StartProcess("explorer.exe", model.TargetPath);
+                    }
+                }
+                return;
+            case DockItemKind.MinimizedWindow:
+                if (model.OpenWindowHandles.Count > 0) WindowTracker.ActivateWindow(model.OpenWindowHandles[0]);
                 return;
             case DockItemKind.Application:
                 if (model.OpenWindowHandles.Count > 0) WindowTracker.ActivateWindow(model.OpenWindowHandles[0]);

@@ -15,6 +15,7 @@ public enum DockItemKind
     Launchpad,
     Application,
     Folder,
+    MinimizedWindow,
     RecycleBin
 }
 
