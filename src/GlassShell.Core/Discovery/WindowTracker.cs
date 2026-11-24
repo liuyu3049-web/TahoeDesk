@@ -196,9 +196,14 @@ public sealed class WindowTracker : IWindowTracker
         if (eventType == EVENT_OBJECT_SHOW)
         {
             string cls = GetClassName(hwnd);
-            if (string.Equals(cls, "Shell_TrayWnd", StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(cls, "Shell_TrayWnd", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(cls, "Shell_SecondaryTrayWnd", StringComparison.OrdinalIgnoreCase))
             {
-                TaskbarShownDetected?.Invoke();
+                GetWindowThreadProcessId(hwnd, out uint pid);
+                if (pid != _selfProcessId)
+                {
+                    TaskbarShownDetected?.Invoke();
+                }
             }
             return;
         }

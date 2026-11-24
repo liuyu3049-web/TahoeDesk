@@ -15,11 +15,13 @@ using System.Windows.Media.Effects;
 using System.Windows.Media.Imaging;
 using System.Windows.Shapes;
 using System.Windows.Threading;
+using GlassShell.Core.Config;
 using GlassShell.Core.Discovery;
 using GlassShell.Core.Launchpad;
 using GlassShell.Core.Search;
 using GlassShell.Core.Shell;
 using GlassShell.UI.Glass;
+using GlassShell.UI.MenuBar;
 using Microsoft.Win32;
 
 namespace GlassShell.UI.Launchpad;
@@ -71,8 +73,11 @@ public partial class LaunchpadWindow : Window
 
     private readonly LaunchpadLayoutManager _layout = new();
     private readonly List<(LaunchpadEntry Entry, Border Tile)> _renderedTiles = [];
+    private readonly LiquidGlassMenuPopup _tileContextMenu = new();
+    private readonly DxgiBackdropSampler _sampler;
     private readonly DispatcherTimer _edgeFlipTimer;
     private readonly string _layoutPath;
+    private bool _isDarkMode = true;
 
     private int _currentPage;
     private LaunchpadFilterMode _filterMode = LaunchpadFilterMode.Primary;
@@ -93,7 +98,8 @@ public partial class LaunchpadWindow : Window
     public LaunchpadWindow(DxgiBackdropSampler sampler)
     {
         InitializeComponent();
-        _ = sampler;
+        _sampler = sampler;
+        _tileContextMenu.ConfigureVisuals(sampler, GlassOpacityPreset.Balanced, isDarkMode: true);
 
         _layoutPath = System.IO.Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -108,10 +114,32 @@ public partial class LaunchpadWindow : Window
         {
             var hwnd = new WindowInteropHelper(this).Handle;
             WindowInteropHelperEx.ExcludeFromCapture(hwnd);
+            _tileContextMenu.OwnerAnchorHwnd = hwnd;
         };
     }
 
     public event Action? RescanRequested;
+    public event Action<string>? PinToDockToggled;
+    public Func<string, bool>? IsPinnedToDockCheck { get; set; }
+
+    public void ApplySettings(GlassSettings settings, bool isDarkMode)
+    {
+        _isDarkMode = isDarkMode;
+        _tileContextMenu.ConfigureVisuals(_sampler, settings.OpacityPreset, isDarkMode);
+
+        int cols = Math.Clamp(settings.LaunchpadColumns, 4, 10);
+        int rows = Math.Clamp(settings.LaunchpadRows, 3, 8);
+        bool gridChanged = _layout.Columns != cols || _layout.Rows != rows;
+        _layout.SetGridSize(cols, rows);
+        AppsGrid.Columns = _layout.Columns;
+        AppsGrid.Rows = _layout.Rows;
+
+        if (gridChanged && IsVisible)
+        {
+            _currentPage = _layout.ClampPage(_currentPage, _filterMode);
+            RenderCurrentView();
+        }
+    }
 
     public void SyncApps(IReadOnlyList<InstalledAppEntry> apps)
     {
@@ -122,7 +150,7 @@ public partial class LaunchpadWindow : Window
         _ = Task.Run(() =>
         {
             BlurredWallpaperProvider.GetBlurredWallpaper();
-            foreach (var app in _layout.ManualApps.Concat(apps).Take(LaunchpadLayoutManager.ItemsPerPage))
+            foreach (var app in _layout.ManualApps.Concat(apps).Take(_layout.ItemsPerPage))
             {
                 string? path = app.IconPath ?? app.LaunchTarget;
                 if (!string.IsNullOrWhiteSpace(path))
@@ -173,6 +201,7 @@ public partial class LaunchpadWindow : Window
     public void DismissSmooth()
     {
         if (!IsVisible) return;
+        _tileContextMenu.IsOpen = false;
         CancelActiveDrag();
         FolderOverlay.Visibility = Visibility.Collapsed;
         _openFolderId = null;
@@ -215,7 +244,7 @@ public partial class LaunchpadWindow : Window
         _currentPage = _layout.ClampPage(_currentPage, _filterMode);
         IReadOnlyList<LaunchpadEntry> pageItems = string.IsNullOrEmpty(query)
             ? _layout.GetPage(_currentPage, _filterMode)
-            : _layout.Filter(query, _filterMode).Take(LaunchpadLayoutManager.ItemsPerPage).ToList();
+            : _layout.Filter(query, _filterMode).Take(_layout.ItemsPerPage).ToList();
 
         var pendingAsyncLoads = new List<(string Path, Image Target)>();
 
@@ -287,7 +316,7 @@ public partial class LaunchpadWindow : Window
         var iconScale = new ScaleTransform(1.0, 1.0);
         UIElement iconVisual = entry.IsFolder
             ? BuildFolderTileVisual(entry, asyncLoads)
-            : BuildAppIconVisual(entry.IconPath ?? entry.LaunchTarget, size: 70, asyncLoads);
+            : BuildAppIconVisual(_layout.GetEffectiveIconPath(entry), size: 70, asyncLoads);
 
         var iconHost = new Grid
         {
@@ -428,62 +457,127 @@ public partial class LaunchpadWindow : Window
         }
         else if (!entry.IsFolder)
         {
-            var ctx = new ContextMenu();
-            if (_filterMode == LaunchpadFilterMode.Hidden)
+            // Authentic macOS rounded Liquid Glass context menu (4 smooth rounded corners, no sharp Win32 rectangle!)
+            tile.MouseRightButtonUp += (_, e) =>
             {
-                var restoreItem = new MenuItem { Header = "取消隐藏（恢复显示）" };
-                restoreItem.Click += (_, _) =>
-                {
-                    if (_layout.RestoreApp(entry.Id))
-                    {
-                        _layout.Save(_layoutPath);
-                        RenderCurrentView();
-                    }
-                };
-                ctx.Items.Add(restoreItem);
-            }
-            else
-            {
-                bool locked = _layout.IsLocked(entry.Id);
-                var lockItem = new MenuItem { Header = locked ? "解除位置锁定" : "锁定此图标位置" };
-                lockItem.Click += (_, _) =>
-                {
-                    _layout.ToggleLock(entry.Id);
-                    _layout.Save(_layoutPath);
-                    RenderCurrentView();
-                };
-                ctx.Items.Add(lockItem);
-
-                var hideItem = new MenuItem { Header = "在启动台中隐藏此应用" };
-                hideItem.Click += (_, _) =>
-                {
-                    if (_layout.HideApp(entry.Id))
-                    {
-                        _layout.Save(_layoutPath);
-                        RenderCurrentView();
-                    }
-                };
-                ctx.Items.Add(hideItem);
-
-                if (_layout.IsManualApp(entry.Id))
-                {
-                    ctx.Items.Add(new Separator());
-                    var removeManualItem = new MenuItem { Header = "从启动台移除（手动添加）" };
-                    removeManualItem.Click += (_, _) =>
-                    {
-                        if (_layout.RemoveManualApp(entry.Id))
-                        {
-                            _layout.Save(_layoutPath);
-                            RenderCurrentView();
-                        }
-                    };
-                    ctx.Items.Add(removeManualItem);
-                }
-            }
-            tile.ContextMenu = ctx;
+                e.Handled = true;
+                ShowTileContextMenu(tile, entry);
+            };
         }
 
         return tile;
+    }
+
+    private void ShowTileContextMenu(UIElement anchor, LaunchpadEntry entry)
+    {
+        var items = new List<PopupMenuEntry>();
+
+        if (_filterMode == LaunchpadFilterMode.Hidden)
+        {
+            items.Add(new("取消隐藏（恢复显示）", OnClick: () =>
+            {
+                if (_layout.RestoreApp(entry.Id))
+                {
+                    _layout.Save(_layoutPath);
+                    RenderCurrentView();
+                }
+            }));
+        }
+        else
+        {
+            if (!string.IsNullOrWhiteSpace(entry.LaunchTarget) && !entry.LaunchTarget.StartsWith("shell:", StringComparison.OrdinalIgnoreCase))
+            {
+                bool alreadyPinned = IsPinnedToDockCheck?.Invoke(entry.LaunchTarget) == true;
+                items.Add(new(alreadyPinned ? "从程序坞中移除" : "添加到程序坞", OnClick: () =>
+                {
+                    PinToDockToggled?.Invoke(entry.LaunchTarget);
+                }));
+                items.Add(new(string.Empty, IsSeparator: true));
+            }
+
+            items.Add(new("更换图标…", OnClick: () => PickCustomIconForEntry(entry)));
+            if (_layout.HasCustomIcon(entry.Id))
+            {
+                items.Add(new("恢复默认图标", OnClick: () =>
+                {
+                    if (_layout.ClearCustomIcon(entry.Id))
+                    {
+                        _layout.Save(_layoutPath);
+                        RenderCurrentView();
+                    }
+                }));
+            }
+
+            items.Add(new(string.Empty, IsSeparator: true));
+
+            bool locked = _layout.IsLocked(entry.Id);
+            items.Add(new(locked ? "解除位置锁定" : "锁定此图标位置", OnClick: () =>
+            {
+                _layout.ToggleLock(entry.Id);
+                _layout.Save(_layoutPath);
+                RenderCurrentView();
+            }));
+
+            items.Add(new("在启动台中隐藏此应用", OnClick: () =>
+            {
+                if (_layout.HideApp(entry.Id))
+                {
+                    _layout.Save(_layoutPath);
+                    RenderCurrentView();
+                }
+            }));
+
+            if (_layout.IsManualApp(entry.Id))
+            {
+                items.Add(new(string.Empty, IsSeparator: true));
+                items.Add(new("从启动台移除（手动添加）", OnClick: () =>
+                {
+                    if (_layout.RemoveManualApp(entry.Id))
+                    {
+                        _layout.Save(_layoutPath);
+                        RenderCurrentView();
+                    }
+                }));
+            }
+        }
+
+        _tileContextMenu.Placement = PlacementMode.MousePoint;
+        _tileContextMenu.PlacementTarget = anchor;
+        _tileContextMenu.HorizontalOffset = 4;
+        _tileContextMenu.VerticalOffset = 4;
+        _tileContextMenu.Populate(items, _isDarkMode);
+        _tileContextMenu.IsOpen = true;
+    }
+
+    private void PickCustomIconForEntry(LaunchpadEntry entry)
+    {
+        CancelActiveDrag();
+        var dlg = new OpenFileDialog
+        {
+            Title = $"为“{entry.Title}”选择新图标",
+            Filter = "图片与图标 (*.png;*.ico;*.jpg;*.jpeg;*.bmp;*.webp;*.exe)|*.png;*.ico;*.jpg;*.jpeg;*.bmp;*.webp;*.exe|所有文件 (*.*)|*.*",
+            Multiselect = false,
+            DereferenceLinks = false
+        };
+
+        bool? ok;
+        Topmost = false;
+        try
+        {
+            ok = dlg.ShowDialog(this);
+        }
+        finally
+        {
+            Topmost = true;
+            Activate();
+        }
+
+        if (ok != true || string.IsNullOrWhiteSpace(dlg.FileName)) return;
+
+        SharedIconCache.Invalidate(dlg.FileName);
+        _layout.SetCustomIcon(entry.Id, dlg.FileName);
+        _layout.Save(_layoutPath);
+        RenderCurrentView();
     }
 
     private void OnRootMouseMove(object sender, MouseEventArgs e)
@@ -633,7 +727,7 @@ public partial class LaunchpadWindow : Window
 
         UIElement ghostIcon = entry.IsFolder
             ? BuildFolderTileVisual(entry, asyncLoads: null)
-            : BuildAppIconVisual(entry.IconPath ?? entry.LaunchTarget, size: 78, asyncLoads: null);
+            : BuildAppIconVisual(_layout.GetEffectiveIconPath(entry), size: 78, asyncLoads: null);
 
         _dragGhost = new Border
         {
@@ -736,7 +830,7 @@ public partial class LaunchpadWindow : Window
         var miniGrid = new UniformGrid { Rows = 3, Columns = 3, Margin = new Thickness(7) };
         foreach (var child in folder.Children.Take(9))
         {
-            miniGrid.Children.Add(BuildAppIconVisual(child.IconPath ?? child.LaunchTarget, size: 17, asyncLoads));
+            miniGrid.Children.Add(BuildAppIconVisual(_layout.GetEffectiveIconPath(child), size: 17, asyncLoads));
         }
 
         return new Border
@@ -761,11 +855,11 @@ public partial class LaunchpadWindow : Window
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Center
         };
-        RenderOptions.SetBitmapScalingMode(img, BitmapScalingMode.Linear);
+        RenderOptions.SetBitmapScalingMode(img, BitmapScalingMode.HighQuality);
 
         if (!string.IsNullOrWhiteSpace(path))
         {
-            if (SharedIconCache.TryGetCached(path, 96, out var cached))
+            if (SharedIconCache.TryGetCached(path, 128, out var cached))
             {
                 if (cached is not null)
                 {
@@ -797,7 +891,7 @@ public partial class LaunchpadWindow : Window
         };
     }
 
-    private static BitmapSource? PreloadIconBitmap(string path) => SharedIconCache.GetOrExtract(path, 96);
+    private static BitmapSource? PreloadIconBitmap(string path) => SharedIconCache.GetOrExtract(path, 128);
 
     private void OpenFolderOverlay(LaunchpadEntry folder)
     {

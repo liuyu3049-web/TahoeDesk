@@ -38,6 +38,8 @@ public sealed record GlassSettings
     public bool HarmonizeDockIcons { get; init; } = false;
     public bool ShowMinimizedWindowsInDock { get; init; } = false;
     public bool InterceptWinKeyForLaunchpad { get; init; } = true;
+    public int LaunchpadColumns { get; init; } = 7;
+    public int LaunchpadRows { get; init; } = 5;
     public string SpotlightHotkey { get; init; } = "Alt+Space";
     public IReadOnlyList<string> PinnedAppPaths { get; init; } = [];
     public IReadOnlyList<string> PinnedFolderPaths { get; init; } = [];

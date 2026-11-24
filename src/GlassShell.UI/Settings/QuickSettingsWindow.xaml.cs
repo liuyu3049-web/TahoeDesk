@@ -47,6 +47,8 @@ public partial class QuickSettingsWindow : Window
         HarmonizeIconsCheck.IsChecked = settings.HarmonizeDockIcons;
         RecentAppsCheck.IsChecked = settings.ShowRecentApps;
         WinKeyLaunchpadCheck.IsChecked = settings.InterceptWinKeyForLaunchpad;
+        SelectComboByTag(LaunchpadColsCombo, settings.LaunchpadColumns.ToString());
+        SelectComboByTag(LaunchpadRowsCombo, settings.LaunchpadRows.ToString());
         AutoStartCheck.IsChecked = AutoStartService.IsEnabled();
         VersionFooterText.Text = $"GlassShell v{DiagnosticsReportBuilder.AppVersion} · Liquid Glass Desktop Shell";
         _loading = false;
@@ -110,6 +112,8 @@ public partial class QuickSettingsWindow : Window
         var theme = Enum.TryParse<ThemeMode>((ThemeCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString(), out var t) ? t : _current.Theme;
         var opacity = Enum.TryParse<GlassOpacityPreset>((OpacityCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString(), out var o) ? o : _current.OpacityPreset;
         var autoHide = Enum.TryParse<DockAutoHideMode>((AutoHideCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString(), out var a) ? a : _current.DockAutoHide;
+        int lpCols = int.TryParse((LaunchpadColsCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString(), out int c) ? c : _current.LaunchpadColumns;
+        int lpRows = int.TryParse((LaunchpadRowsCombo.SelectedItem as ComboBoxItem)?.Tag?.ToString(), out int r) ? r : _current.LaunchpadRows;
 
         _current = _current with
         {
@@ -122,7 +126,9 @@ public partial class QuickSettingsWindow : Window
             DockAutoHide = autoHide,
             HarmonizeDockIcons = HarmonizeIconsCheck.IsChecked == true,
             ShowRecentApps = RecentAppsCheck.IsChecked == true,
-            InterceptWinKeyForLaunchpad = WinKeyLaunchpadCheck.IsChecked == true
+            InterceptWinKeyForLaunchpad = WinKeyLaunchpadCheck.IsChecked == true,
+            LaunchpadColumns = lpCols,
+            LaunchpadRows = lpRows
         };
 
         bool resolvedDark = theme switch

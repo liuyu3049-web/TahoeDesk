@@ -228,5 +228,32 @@ public sealed class LaunchpadLayoutTests
         Assert.Equal("app:37", mgr.GetPage(0, LaunchpadFilterMode.Primary)[0].Id);
         Assert.True(mgr.MoveToEndOfPage("app:38", 0, LaunchpadFilterMode.Primary));
         Assert.Contains(mgr.GetPage(0, LaunchpadFilterMode.Primary), e => e.Id == "app:38");
+
+        // Dynamic grid size (e.g. 6x4 = 24 per page) + custom icon persistence
+        mgr.SetGridSize(6, 4);
+        Assert.Equal(24, mgr.ItemsPerPage);
+        Assert.Equal(24, mgr.GetPage(0, LaunchpadFilterMode.Primary).Count);
+
+        string tempIcon = Path.Combine(Path.GetTempPath(), $"GlassShell_CustomIcon_{Guid.NewGuid():N}.png");
+        string tempJson = Path.Combine(Path.GetTempPath(), $"GlassShell_LaunchpadCustom_{Guid.NewGuid():N}.json");
+        try
+        {
+            File.WriteAllBytes(tempIcon, [0x89, 0x50, 0x4E, 0x47]);
+            mgr.SetCustomIcon("app:0", tempIcon);
+            Assert.True(mgr.HasCustomIcon("app:0"));
+            Assert.Equal(tempIcon, mgr.GetEffectiveIconPath(mgr.Entries.First(e => e.Id == "app:0")));
+
+            mgr.Save(tempJson);
+            var loaded = new LaunchpadLayoutManager();
+            loaded.Load(tempJson);
+            Assert.True(loaded.HasCustomIcon("app:0"));
+            Assert.True(loaded.ClearCustomIcon("app:0"));
+            Assert.False(loaded.HasCustomIcon("app:0"));
+        }
+        finally
+        {
+            if (File.Exists(tempIcon)) File.Delete(tempIcon);
+            if (File.Exists(tempJson)) File.Delete(tempJson);
+        }
     }
 }

@@ -61,6 +61,7 @@ public partial class App : Application
     private readonly object _dockStateGate = new();
     private DispatcherTimer? _dockDebounceTimer;
     private int _dockRefreshInFlight;
+    private int? _originalTaskbarAutoHideState;
     private bool _cleanedUp;
 
     protected override void OnStartup(StartupEventArgs e)
@@ -69,7 +70,7 @@ public partial class App : Application
 
         if (e.Args.Any(a => string.Equals(a, "--restore-taskbar", StringComparison.OrdinalIgnoreCase)))
         {
-            Win32TaskbarNative.RestorePrimaryTaskbarNow();
+            Win32TaskbarNative.RestorePrimaryTaskbarNow(restoreState: 0);
             Shutdown(0);
             return;
         }
@@ -97,7 +98,17 @@ public partial class App : Application
         SystemEvents.SessionSwitch += OnSessionSwitch;
         SystemEvents.PowerModeChanged += OnPowerModeChanged;
 
-        LaunchWatchdog();
+        // Enable taskbar auto-hide BEFORE acquiring work area so Windows releases the bottom ~48px reserved strip
+        // on EVERY monitor (primary + external), allowing maximized windows to truly fill the full screen!
+        // Original state is passed to GlassShell.Watchdog so even a crash/force-kill restores it 100%.
+        int origState = Win32TaskbarNative.GetTaskbarAutoHideState();
+        if ((origState & Win32TaskbarNative.ABS_AUTOHIDE) == 0)
+        {
+            _originalTaskbarAutoHideState = origState;
+            Win32TaskbarNative.SetTaskbarAutoHideState(origState | Win32TaskbarNative.ABS_AUTOHIDE);
+        }
+
+        LaunchWatchdog(_originalTaskbarAutoHideState);
 
         _settingsStore = new JsonSettingsStore();
         bool firstRun = !File.Exists(_settingsStore.FilePath);
@@ -135,7 +146,10 @@ public partial class App : Application
         _hotkeyManager = new GlobalHotkeyManager();
 
         _launchpadWindow = new LaunchpadWindow(_backdropSampler);
+        _launchpadWindow.ApplySettings(_settings, isDark);
         _launchpadWindow.RescanRequested += () => _ = RefreshSearchAndLaunchpadIndexAsync();
+        _launchpadWindow.IsPinnedToDockCheck = path => _settings.PinnedAppPaths.Any(p => string.Equals(p, path, StringComparison.OrdinalIgnoreCase));
+        _launchpadWindow.PinToDockToggled += ToggleAppPinnedToDock;
         _spotlightWindow = new SpotlightWindow(_backdropSampler, _settings, isDark);
         _spotlightWindow.SystemCommandRequested += HandleSpotlightSystemCommand;
 
@@ -166,6 +180,7 @@ public partial class App : Application
 
             dock.LaunchpadRequested += () => ToggleLaunchpad(monitor);
             dock.SettingsUpdated += ApplyUpdatedSettings;
+            dock.RemoveRecentAppRequested += RemoveRecentApp;
 
             menuBar.Show();
             dock.Show();
@@ -335,6 +350,7 @@ public partial class App : Application
 
                 dock.LaunchpadRequested += () => ToggleLaunchpad(monitor);
                 dock.SettingsUpdated += ApplyUpdatedSettings;
+                dock.RemoveRecentAppRequested += RemoveRecentApp;
 
                 menuBar.Show();
                 dock.Show();
@@ -376,6 +392,14 @@ public partial class App : Application
             {
                 OnForegroundChanged(fg);
             }
+        }
+
+        // Self-heal if Windows Explorer unexpectedly re-showed primary or secondary native taskbar!
+        if (_taskbarController is { IsAcquired: true, IsTrayPeekActive: false }
+            && _taskbarNative is not null
+            && _taskbarNative.IsAnyNativeTaskbarVisible())
+        {
+            _taskbarController.HandleTaskbarShownEvent();
         }
 
         // Always evaluate per-monitor fullscreen & maximize states independently (catches maximize/un-maximize on same HWND!)
@@ -563,10 +587,40 @@ public partial class App : Application
             _winKeyHook.Enabled = updated.InterceptWinKeyForLaunchpad;
         }
         _spotlightWindow?.ApplySettings(updated, isDark);
+        _launchpadWindow?.ApplySettings(updated, isDark);
         foreach (var s in _shells)
         {
             s.MenuBar.ApplySettings(updated, isDark);
             s.Dock.ApplySettings(updated, isDark);
+        }
+        RefreshDockItems();
+    }
+
+    private void ToggleAppPinnedToDock(string targetPath)
+    {
+        if (string.IsNullOrWhiteSpace(targetPath)) return;
+        bool exists = _settings.PinnedAppPaths.Any(p => string.Equals(p, targetPath, StringComparison.OrdinalIgnoreCase));
+        var nextPins = exists
+            ? _settings.PinnedAppPaths.Where(p => !string.Equals(p, targetPath, StringComparison.OrdinalIgnoreCase)).ToList()
+            : [.. _settings.PinnedAppPaths, targetPath];
+        ApplyUpdatedSettings(_settings with { PinnedAppPaths = nextPins });
+    }
+
+    private void RemoveRecentApp(string targetPath)
+    {
+        if (string.IsNullOrWhiteSpace(targetPath)) return;
+        lock (_dockStateGate)
+        {
+            var node = _recentApps.First;
+            while (node is not null)
+            {
+                var next = node.Next;
+                if (string.Equals(node.Value, targetPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    _recentApps.Remove(node);
+                }
+                node = next;
+            }
         }
         RefreshDockItems();
     }
@@ -775,7 +829,7 @@ public partial class App : Application
         }
     }
 
-    private void LaunchWatchdog()
+    private void LaunchWatchdog(int? restoreAutoHideState = null)
     {
         try
         {
@@ -786,10 +840,11 @@ public partial class App : Application
             string watchdogExe = Path.Combine(AppContext.BaseDirectory, "GlassShell.Watchdog.exe");
             if (File.Exists(watchdogExe))
             {
+                string extra = restoreAutoHideState.HasValue ? $" --restore-autohide {restoreAutoHideState.Value}" : string.Empty;
                 Process.Start(new ProcessStartInfo
                 {
                     FileName = watchdogExe,
-                    Arguments = $"--parent-pid {pid} --clean-event {eventName}",
+                    Arguments = $"--parent-pid {pid} --clean-event {eventName}{extra}",
                     UseShellExecute = false,
                     CreateNoWindow = true
                 });
@@ -844,6 +899,11 @@ public partial class App : Application
         try { _hotkeyManager?.Dispose(); } catch { }
         try { _windowTracker?.Dispose(); } catch { }
         try { _menuCoordinator?.Dispose(); } catch { }
+        // Wallpaper-Engine-safe shutdown sequence:
+        // 1. Destroy our proxy Shell_TrayWnd FIRST so no app can message a dying proxy window.
+        // 2. Unregister AppBars, restore original auto-hide state, and show Explorer's real native taskbar.
+        // 3. Broadcast TaskbarCreated LAST via _trayProxyHost.Dispose() so all apps cleanly re-bind to Explorer!
+        try { _trayProxyHost?.DestroyProxyWindowOnly(); } catch { }
         try
         {
             if (_taskbarNative is not null)
@@ -858,8 +918,15 @@ public partial class App : Application
             }
         }
         catch { }
-        // Restore native taskbar visibility FIRST, then destroy our Shell_TrayWnd proxy & broadcast TaskbarCreated
-        // so all running tray apps immediately re-register onto Explorer's restored taskbar.
+        try
+        {
+            if (_originalTaskbarAutoHideState.HasValue)
+            {
+                Win32TaskbarNative.SetTaskbarAutoHideState(_originalTaskbarAutoHideState.Value);
+                _originalTaskbarAutoHideState = null;
+            }
+        }
+        catch { }
         try { _taskbarController?.Release(); } catch { }
         try { _trayProxyHost?.Dispose(); } catch { }
         try { _backdropSampler?.Dispose(); } catch { }

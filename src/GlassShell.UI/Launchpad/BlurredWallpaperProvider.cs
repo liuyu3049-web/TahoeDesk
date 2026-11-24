@@ -43,9 +43,18 @@ public static class BlurredWallpaperProvider
                 return _cachedBlur;
             }
 
+            // Read with FileShare.ReadWrite | FileShare.Delete so Wallpaper Engine never hits a sharing violation!
+            byte[] fileBytes;
+            using (var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+            {
+                fileBytes = new byte[fs.Length];
+                fs.ReadExactly(fileBytes);
+            }
+
+            using var ms = new MemoryStream(fileBytes, writable: false);
             var decoder = new BitmapImage();
             decoder.BeginInit();
-            decoder.UriSource = new Uri(path, UriKind.Absolute);
+            decoder.StreamSource = ms;
             decoder.DecodePixelWidth = 320;
             decoder.CacheOption = BitmapCacheOption.OnLoad;
             decoder.EndInit();

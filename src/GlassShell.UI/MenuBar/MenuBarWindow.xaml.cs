@@ -262,8 +262,30 @@ public partial class MenuBarWindow : Window
         BatteryButton.Visibility = status.HasBattery ? Visibility.Visible : Visibility.Collapsed;
         if (status.HasBattery)
         {
-            BatteryPercentText.Text = $"{status.BatteryPercent}%";
-            BatteryFillBar.Width = Math.Max(2, 16.0 * status.BatteryPercent / 100.0);
+            BatteryPercentText.Text = $"{status.BatteryPercent}";
+            BatteryFillBar.Width = Math.Max(2, 25.0 * status.BatteryPercent / 100.0);
+            if (status.IsCharging)
+            {
+                var green = new SolidColorBrush(Color.FromRgb(0x34, 0xC7, 0x59));
+                green.Freeze();
+                BatteryFillBar.Background = green;
+                BatteryFillBar.Opacity = 0.78;
+            }
+            else if (status.BatteryPercent <= 20)
+            {
+                var red = new SolidColorBrush(Color.FromRgb(0xFF, 0x3B, 0x30));
+                red.Freeze();
+                BatteryFillBar.Background = red;
+                BatteryFillBar.Opacity = 0.80;
+            }
+            else
+            {
+                BatteryFillBar.Background = Resources["MenuBarForegroundBrush"] as Brush ?? Brushes.White;
+                BatteryFillBar.Opacity = 0.34;
+            }
+            BatteryButton.ToolTip = status.IsCharging
+                ? $"电池 {status.BatteryPercent}%（正在充电）"
+                : $"电池 {status.BatteryPercent}%（点击切换电源模式）";
         }
     }
 
@@ -482,6 +504,7 @@ public partial class MenuBarWindow : Window
                 Width = 16,
                 Height = 16,
                 Stretch = Stretch.Uniform,
+                Opacity = item.IsBlinkOffPhase ? 0.25 : 1.0,
                 HorizontalAlignment = HorizontalAlignment.Center,
                 VerticalAlignment = VerticalAlignment.Center
             };
@@ -494,6 +517,7 @@ public partial class MenuBarWindow : Window
             {
                 Width = 8,
                 Height = 8,
+                Opacity = item.IsBlinkOffPhase ? 0.25 : 0.75,
                 Fill = Resources["MenuBarForegroundBrush"] as Brush ?? Brushes.White
             };
         }

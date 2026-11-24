@@ -144,8 +144,32 @@
                             <CheckBox x:Name="WinKeyLaunchpadCheck"
                                       Content="单按 Win 键呼出启动台（组合键正常保留）"
                                       Foreground="{DynamicResource SettingsFgBrush}"
+                                      Margin="0,0,0,10"
                                       Checked="OnSettingChanged"
                                       Unchecked="OnSettingChanged" />
+
+                            <DockPanel Margin="0,0,0,8">
+                                <TextBlock Text="启动台每页列数" Foreground="{DynamicResource SettingsFgBrush}" VerticalAlignment="Center" />
+                                <ComboBox x:Name="LaunchpadColsCombo" Width="110" HorizontalAlignment="Right" SelectionChanged="OnSettingChanged" DropDownOpened="OnComboDropDownOpened">
+                                    <ComboBoxItem Content="5 列" Tag="5" />
+                                    <ComboBoxItem Content="6 列" Tag="6" />
+                                    <ComboBoxItem Content="7 列（默认）" Tag="7" />
+                                    <ComboBoxItem Content="8 列" Tag="8" />
+                                    <ComboBoxItem Content="9 列" Tag="9" />
+                                    <ComboBoxItem Content="10 列" Tag="10" />
+                                </ComboBox>
+                            </DockPanel>
+
+                            <DockPanel>
+                                <TextBlock Text="启动台每页行数" Foreground="{DynamicResource SettingsFgBrush}" VerticalAlignment="Center" />
+                                <ComboBox x:Name="LaunchpadRowsCombo" Width="110" HorizontalAlignment="Right" SelectionChanged="OnSettingChanged" DropDownOpened="OnComboDropDownOpened">
+                                    <ComboBoxItem Content="3 行" Tag="3" />
+                                    <ComboBoxItem Content="4 行" Tag="4" />
+                                    <ComboBoxItem Content="5 行（默认）" Tag="5" />
+                                    <ComboBoxItem Content="6 行" Tag="6" />
+                                    <ComboBoxItem Content="7 行" Tag="7" />
+                                </ComboBox>
+                            </DockPanel>
                         </StackPanel>
                     </Border>
 

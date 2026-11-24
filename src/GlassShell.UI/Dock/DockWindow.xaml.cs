@@ -108,6 +108,7 @@ public partial class DockWindow : Window
 
     public event Action? LaunchpadRequested;
     public event Action<GlassSettings>? SettingsUpdated;
+    public event Action<string>? RemoveRecentAppRequested;
 
     public void ApplySettings(GlassSettings settings, bool isDarkMode)
     {
@@ -827,6 +828,10 @@ public partial class DockWindow : Window
                 entries.Add(model.IsPinned
                     ? new("从程序坞中移除", OnClick: () => UnpinApp(model.TargetPath))
                     : new("在程序坞中保留", OnClick: () => PinApp(model.TargetPath)));
+                if (!model.IsPinned && !model.IsRunning)
+                {
+                    entries.Add(new("从最近使用中移除", OnClick: () => RemoveRecentAppRequested?.Invoke(model.TargetPath)));
+                }
                 entries.Add(new("在资源管理器中显示", OnClick: () => StartProcess("explorer.exe", $"/select,\"{model.TargetPath}\"")));
             }
 
