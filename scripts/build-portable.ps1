@@ -5,6 +5,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+$ProgressPreference = "SilentlyContinue"
 
 $repoRoot = Split-Path -Parent $PSScriptRoot
 $dotnet = Join-Path $repoRoot ".tools\dotnet\dotnet.exe"
@@ -54,7 +55,8 @@ Copy-Item -Path (Join-Path $repoRoot "LICENSE") -Destination $stageDir -Force
 Copy-Item -Path (Join-Path $repoRoot "README.md") -Destination $stageDir -Force
 
 if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
-Compress-Archive -Path (Join-Path $stageDir "*") -DestinationPath $zipPath -CompressionLevel Optimal
+Add-Type -AssemblyName System.IO.Compression.FileSystem
+[System.IO.Compression.ZipFile]::CreateFromDirectory($stageDir, $zipPath, [System.IO.Compression.CompressionLevel]::Optimal, $false)
 
 $zipSizeMB = [math]::Round((Get-Item $zipPath).Length / 1MB, 2)
 Write-Host "[GlassShell] Portable package ready: $zipPath ($zipSizeMB MB)" -ForegroundColor Green
