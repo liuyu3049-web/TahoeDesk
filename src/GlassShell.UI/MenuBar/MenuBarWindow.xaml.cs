@@ -16,6 +16,7 @@ using GlassShell.Core.MenuEngine;
 using GlassShell.Core.Shell;
 using GlassShell.Core.SystemStatus;
 using GlassShell.Core.Tray;
+using GlassShell.UI.ControlCenter;
 using GlassShell.UI.Glass;
 using GlassShell.UI.Tray;
 
@@ -30,9 +31,11 @@ public partial class MenuBarWindow : Window
     private readonly IWindowTracker _windowTracker;
     private readonly DxgiBackdropSampler _sampler;
     private readonly TrayProxyHost _trayProxyHost;
+    private readonly GlobalHotkeyManager? _hotkeyManager;
     private readonly LiquidGlassMenuPopup _menuPopup = new();
     private readonly CalendarPopup _calendarPopup = new();
     private readonly TrayOverflowPopup _trayOverflowPopup = new();
+    private readonly ControlCenterPopup _controlCenterPopup = new();
     private readonly DispatcherTimer _statusTimer;
 
     private MonitorContext _monitor;
@@ -48,7 +51,8 @@ public partial class MenuBarWindow : Window
         DxgiBackdropSampler sampler,
         TrayProxyHost trayProxyHost,
         GlassSettings settings,
-        bool isDarkMode)
+        bool isDarkMode,
+        GlobalHotkeyManager? hotkeyManager = null)
     {
         InitializeComponent();
         _monitor = monitor;
@@ -56,6 +60,7 @@ public partial class MenuBarWindow : Window
         _windowTracker = windowTracker;
         _sampler = sampler;
         _trayProxyHost = trayProxyHost;
+        _hotkeyManager = hotkeyManager;
         _settings = settings;
         DataContext = _vm;
 
@@ -65,6 +70,8 @@ public partial class MenuBarWindow : Window
         _trayOverflowPopup.TrayIconInvoked += HandleTrayIconInvoked;
         _trayOverflowPopup.TrayIconPinToggled += HandleTrayIconPinToggled;
         _trayOverflowPopup.NativeTaskbarPeekRequested += ToggleNativeTaskbarPeek;
+        _controlCenterPopup.Closed += (_, _) => ControlCenterButton.Tag = null;
+        _controlCenterPopup.ThemeChangeRequested += theme => SettingsUpdated?.Invoke(_settings with { Theme = theme });
         ApplySettings(settings, isDarkMode);
         PositionToMonitor(monitor);
 
@@ -95,6 +102,7 @@ public partial class MenuBarWindow : Window
         _menuPopup.ConfigureVisuals(_sampler, settings.OpacityPreset, isDarkMode);
         _calendarPopup.ConfigureVisuals(_sampler, settings.OpacityPreset, isDarkMode);
         _trayOverflowPopup.ConfigureVisuals(_sampler, settings.OpacityPreset, isDarkMode);
+        _controlCenterPopup.ConfigureVisuals(_sampler, settings, isDarkMode);
         UpdateTopBarInk(settings.ShowMenuBarBackground, isDarkMode);
         RebuildTrayVisuals();
     }
@@ -112,6 +120,7 @@ public partial class MenuBarWindow : Window
             _menuPopup.IsOpen = false;
             _calendarPopup.IsOpen = false;
             _trayOverflowPopup.IsOpen = false;
+            _controlCenterPopup.IsOpen = false;
         });
     }
 
@@ -177,6 +186,7 @@ public partial class MenuBarWindow : Window
         _menuPopup.OwnerAnchorHwnd = hwnd;
         _calendarPopup.OwnerAnchorHwnd = hwnd;
         _trayOverflowPopup.OwnerAnchorHwnd = hwnd;
+        _controlCenterPopup.OwnerAnchorHwnd = hwnd;
 
         _taskbarCreatedMsg = RegisterWindowMessageW("TaskbarCreated");
         HwndSource.FromHwnd(hwnd)?.AddHook(WndProc);
@@ -184,6 +194,12 @@ public partial class MenuBarWindow : Window
 
     private nint WndProc(nint hwnd, int msg, nint wParam, nint lParam, ref bool handled)
     {
+        if (_hotkeyManager is not null && _hotkeyManager.ProcessWndProc(msg, wParam))
+        {
+            handled = true;
+            return 0;
+        }
+
         if (_taskbarCreatedMsg != 0 && (uint)msg == _taskbarCreatedMsg && !_trayProxyHost.IsSelfBroadcastActive)
         {
             _taskbarController.HandleExplorerRestart();
@@ -217,6 +233,7 @@ public partial class MenuBarWindow : Window
             _menuPopup.IsOpen = false;
             _calendarPopup.IsOpen = false;
             _trayOverflowPopup.IsOpen = false;
+            _controlCenterPopup.IsOpen = false;
         }
     }
 
@@ -270,6 +287,7 @@ public partial class MenuBarWindow : Window
     {
         _calendarPopup.IsOpen = false;
         _trayOverflowPopup.IsOpen = false;
+        _controlCenterPopup.IsOpen = false;
         ClearActiveMenuButton();
         _activeMenuButton = button;
         button.Tag = "Active";
@@ -513,6 +531,7 @@ public partial class MenuBarWindow : Window
     {
         _menuPopup.IsOpen = false;
         _calendarPopup.IsOpen = false;
+        _controlCenterPopup.IsOpen = false;
 
         if (_trayOverflowPopup.IsOpen)
         {
@@ -546,13 +565,40 @@ public partial class MenuBarWindow : Window
         _dispatcher.Dispatch(_vm.ActiveTargetHwnd, new MenuInvokeAction(MenuActionKind.KeyboardShortcut, Shortcut: "Win+Space"));
     }
 
-    private void OnSpotlightClick(object sender, RoutedEventArgs e) => SpotlightRequested?.Invoke();
-    private void OnControlCenterClick(object sender, RoutedEventArgs e) => ControlCenterRequested?.Invoke();
+    private void OnSpotlightClick(object sender, RoutedEventArgs e)
+    {
+        _menuPopup.IsOpen = false;
+        _calendarPopup.IsOpen = false;
+        _trayOverflowPopup.IsOpen = false;
+        _controlCenterPopup.IsOpen = false;
+        SpotlightRequested?.Invoke();
+    }
+
+    private void OnControlCenterClick(object sender, RoutedEventArgs e)
+    {
+        _menuPopup.IsOpen = false;
+        _calendarPopup.IsOpen = false;
+        _trayOverflowPopup.IsOpen = false;
+
+        if (_controlCenterPopup.IsOpen)
+        {
+            _controlCenterPopup.IsOpen = false;
+            return;
+        }
+
+        _controlCenterPopup.PlacementTarget = ControlCenterButton;
+        _controlCenterPopup.HorizontalOffset = -270;
+        _controlCenterPopup.VerticalOffset = 4;
+        ControlCenterButton.Tag = "Active";
+        _controlCenterPopup.IsOpen = true;
+        ControlCenterRequested?.Invoke();
+    }
 
     private void OnClockClick(object sender, RoutedEventArgs e)
     {
         _menuPopup.IsOpen = false;
         _trayOverflowPopup.IsOpen = false;
+        _controlCenterPopup.IsOpen = false;
         if (_calendarPopup.IsOpen)
         {
             _calendarPopup.IsOpen = false;

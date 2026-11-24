@@ -4,7 +4,7 @@
         xmlns:glass="clr-namespace:GlassShell.UI.Glass"
         Title="GlassShell 设置"
         Width="460"
-        Height="490"
+        Height="532"
         WindowStyle="None"
         AllowsTransparency="True"
         Background="Transparent"
@@ -120,6 +120,13 @@
 
                             <CheckBox x:Name="RecentAppsCheck"
                                       Content="在程序坞中显示最近使用的应用"
+                                      Foreground="{DynamicResource SettingsFgBrush}"
+                                      Margin="0,0,0,8"
+                                      Checked="OnSettingChanged"
+                                      Unchecked="OnSettingChanged" />
+
+                            <CheckBox x:Name="WinKeyLaunchpadCheck"
+                                      Content="单按 Win 键呼出启动台（组合键正常保留）"
                                       Foreground="{DynamicResource SettingsFgBrush}"
                                       Checked="OnSettingChanged"
                                       Unchecked="OnSettingChanged" />

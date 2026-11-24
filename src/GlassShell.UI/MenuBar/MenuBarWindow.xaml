@@ -126,7 +126,8 @@
                           Stretch="Uniform" />
                 </Button>
 
-                <Button Style="{StaticResource MenuBarButtonStyle}"
+                <Button x:Name="ControlCenterButton"
+                        Style="{StaticResource MenuBarButtonStyle}"
                         Padding="6,0"
                         ToolTip="控制中心"
                         Click="OnControlCenterClick">

@@ -3,17 +3,23 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using GlassShell.Core.Config;
 using GlassShell.Core.Discovery;
 using GlassShell.Core.MenuEngine;
+using GlassShell.Core.Search;
 using GlassShell.Core.Shell;
 using GlassShell.UI.Dock;
 using GlassShell.UI.Glass;
+using GlassShell.UI.Launchpad;
 using GlassShell.UI.MenuBar;
 using GlassShell.UI.Settings;
+using GlassShell.UI.Spotlight;
 using GlassShell.UI.Tray;
 using Microsoft.Win32;
 
@@ -33,11 +39,19 @@ public partial class App : Application
     private ForegroundMenuCoordinator? _menuCoordinator;
     private DxgiBackdropSampler? _backdropSampler;
     private TrayProxyHost? _trayProxyHost;
+    private LowLevelWinKeyHook? _winKeyHook;
+    private GlobalHotkeyManager? _hotkeyManager;
     private RecycleBinService? _recycleBinService;
+    private readonly WindowSnapshotCache<BitmapSource> _snapshotCache = new(16);
     private readonly List<DisplayShellPair> _shells = [];
+    private LaunchpadWindow? _launchpadWindow;
+    private SpotlightWindow? _spotlightWindow;
     private QuickSettingsWindow? _settingsWindow;
+    private IReadOnlyList<InstalledAppEntry> _cachedApps = [];
+    private IReadOnlyList<IndexedFileEntry> _cachedFiles = [];
     private DispatcherTimer? _periodicRefreshTimer;
     private DispatcherTimer? _foregroundReconcileTimer;
+    private DispatcherTimer? _indexRefreshTimer;
     private nint _lastForegroundHwnd;
     private string _lastForegroundTitle = string.Empty;
     private readonly LinkedList<string> _recentApps = new();
@@ -90,6 +104,12 @@ public partial class App : Application
         _recycleBinService = new RecycleBinService();
         _backdropSampler = new DxgiBackdropSampler();
         _trayProxyHost = new TrayProxyHost();
+        _winKeyHook = new LowLevelWinKeyHook { Enabled = _settings.InterceptWinKeyForLaunchpad };
+        _hotkeyManager = new GlobalHotkeyManager();
+
+        _launchpadWindow = new LaunchpadWindow(_backdropSampler);
+        _spotlightWindow = new SpotlightWindow(_backdropSampler, _settings, isDark);
+        _spotlightWindow.SystemCommandRequested += HandleSpotlightSystemCommand;
 
         var extractors = new IMenuExtractor[]
         {
@@ -103,8 +123,8 @@ public partial class App : Application
 
         foreach (var monitor in monitors)
         {
-            var menuBar = new MenuBarWindow(monitor, _taskbarController, _windowTracker, _backdropSampler, _trayProxyHost, _settings, isDark);
-            var dock = new DockWindow(monitor, _backdropSampler, _settings, isDark);
+            var menuBar = new MenuBarWindow(monitor, _taskbarController, _windowTracker, _backdropSampler, _trayProxyHost, _settings, isDark, _hotkeyManager);
+            var dock = new DockWindow(monitor, _backdropSampler, _settings, isDark, _snapshotCache);
 
             menuBar.SettingsRequested += OpenQuickSettings;
             menuBar.SettingsUpdated += ApplyUpdatedSettings;
@@ -113,10 +133,9 @@ public partial class App : Application
                 CleanupSafe();
                 Shutdown(0);
             };
-            menuBar.SpotlightRequested += () => ShowPhase2Notice("聚焦搜索 (Spotlight) 将在阶段二启用");
-            menuBar.ControlCenterRequested += () => ShowPhase2Notice("控制中心 (Control Center) 将在阶段二启用");
+            menuBar.SpotlightRequested += () => ToggleSpotlight(monitor);
 
-            dock.LaunchpadRequested += () => ShowPhase2Notice("启动台 (Launchpad) 将在阶段二启用");
+            dock.LaunchpadRequested += () => ToggleLaunchpad(monitor);
             dock.SettingsUpdated += ApplyUpdatedSettings;
 
             menuBar.Show();
@@ -146,6 +165,7 @@ public partial class App : Application
 
         _windowTracker.TaskbarShownDetected += () => _taskbarController.HandleTaskbarShownEvent();
         _windowTracker.ForegroundChanged += OnForegroundChanged;
+        _windowTracker.WindowMinimizing += OnWindowMinimizing;
         _windowTracker.WindowsChanged += () => Dispatcher.InvokeAsync(RefreshDockItems);
 
         // Acquire taskbar suppression + primary top AppBar matching MenuBar height 1:1
@@ -160,6 +180,11 @@ public partial class App : Application
             }
         }
 
+        // Register global Spotlight hotkey (Alt+Space) on primary MenuBar HWND and start Win-key Launchpad hook
+        _hotkeyManager.Register(primary.MenuBar.Hwnd, id: 1, _settings.SpotlightHotkey, () => ToggleSpotlight(GetCursorMonitor()));
+        _winKeyHook.SingleWinPressed += () => Dispatcher.InvokeAsync(() => ToggleLaunchpad(GetCursorMonitor()));
+        _winKeyHook.Start();
+
         _windowTracker.Start();
 
         // Start zero-injection Shell_TrayWnd tray proxy AFTER AppBar registration so SHAppBarMessage hits Explorer cleanly
@@ -171,6 +196,7 @@ public partial class App : Application
 
         RefreshDockItems();
         OnForegroundChanged(_windowTracker.GetForegroundWindowInfo());
+        _ = RefreshSearchAndLaunchpadIndexAsync();
 
         _periodicRefreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
         _periodicRefreshTimer.Tick += (_, _) => RefreshDockItems();
@@ -179,6 +205,10 @@ public partial class App : Application
         _foregroundReconcileTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
         _foregroundReconcileTimer.Tick += (_, _) => ReconcileForegroundWindow();
         _foregroundReconcileTimer.Start();
+
+        _indexRefreshTimer = new DispatcherTimer { Interval = TimeSpan.FromMinutes(3) };
+        _indexRefreshTimer.Tick += (_, _) => _ = RefreshSearchAndLaunchpadIndexAsync();
+        _indexRefreshTimer.Start();
     }
 
     private void ReconcileForegroundWindow()
@@ -232,6 +262,10 @@ public partial class App : Application
             }
         }
         _taskbarController.UpdateFullscreenState(anyFullscreen);
+        if (_winKeyHook is not null)
+        {
+            _winKeyHook.IsFullscreenActive = anyFullscreen;
+        }
 
         if (_menuCoordinator is not null && fg.Hwnd != 0)
         {
@@ -266,6 +300,10 @@ public partial class App : Application
         // Remove apps from stable order only once all their windows have closed
         _stableRunningOrder.RemoveAll(p => !activeExes.Contains(p));
 
+        // Prune snapshot cache for restored or closed windows
+        var minimizedHwnds = new HashSet<nint>(windows.Where(w => w.IsMinimized).Select(w => w.Hwnd));
+        _snapshotCache.Prune(minimizedHwnds);
+
         var rb = _recycleBinService.Query();
         var items = DockModelCoordinator.BuildDockItems(_settings, windows, _recentApps.ToList(), rb, _stableRunningOrder);
         foreach (var s in _shells)
@@ -279,12 +317,126 @@ public partial class App : Application
         _settings = updated;
         _settingsStore?.Save(updated);
         bool isDark = ResolveIsDarkMode(updated);
+        if (_winKeyHook is not null)
+        {
+            _winKeyHook.Enabled = updated.InterceptWinKeyForLaunchpad;
+        }
+        _spotlightWindow?.ApplySettings(updated, isDark);
         foreach (var s in _shells)
         {
             s.MenuBar.ApplySettings(updated, isDark);
             s.Dock.ApplySettings(updated, isDark);
         }
         RefreshDockItems();
+    }
+
+    private void OnWindowMinimizing(nint hwnd)
+    {
+        var snap = WindowThumbnailCapturer.CaptureThumbnail(hwnd);
+        if (snap is not null)
+        {
+            _snapshotCache.Put(hwnd, snap);
+        }
+    }
+
+    private async Task RefreshSearchAndLaunchpadIndexAsync()
+    {
+        try
+        {
+            var (apps, files) = await Task.Run(() => (
+                InstalledAppScanner.ScanInstalledApps(),
+                InstalledAppScanner.ScanLocalUserFiles(maxFiles: 300)));
+
+            _cachedApps = apps;
+            _cachedFiles = files;
+
+            await Dispatcher.InvokeAsync(() =>
+            {
+                _spotlightWindow?.UpdateIndex(apps, files);
+                _launchpadWindow?.SyncApps(apps);
+            });
+        }
+        catch { }
+    }
+
+    private void ToggleLaunchpad(MonitorContext monitor)
+    {
+        if (_spotlightWindow is { IsVisible: true }) _spotlightWindow.Hide();
+        foreach (var s in _shells)
+        {
+            s.MenuBar.DismissPopups();
+            s.Dock.DismissPopups();
+        }
+        _launchpadWindow?.ToggleOnMonitor(monitor, _cachedApps);
+    }
+
+    private void ToggleSpotlight(MonitorContext monitor)
+    {
+        if (_launchpadWindow is { IsVisible: true }) _launchpadWindow.DismissSmooth();
+        foreach (var s in _shells)
+        {
+            s.MenuBar.DismissPopups();
+            s.Dock.DismissPopups();
+        }
+        _spotlightWindow?.ToggleOnMonitor(monitor);
+    }
+
+    private MonitorContext GetCursorMonitor()
+    {
+        if (GetCursorPos(out POINT pt))
+        {
+            foreach (var s in _shells)
+            {
+                var b = s.Monitor.Bounds;
+                if (pt.X >= b.Left && pt.X < b.Right && pt.Y >= b.Top && pt.Y < b.Bottom)
+                {
+                    return s.Monitor;
+                }
+            }
+        }
+        return (_shells.FirstOrDefault(s => s.Monitor.IsPrimary) ?? _shells[0]).Monitor;
+    }
+
+    private void HandleSpotlightSystemCommand(string commandId)
+    {
+        switch (commandId)
+        {
+            case "cmd:lock":
+                LockWorkStation();
+                break;
+            case "cmd:sleep":
+                SetSuspendState(false, false, false);
+                break;
+            case "cmd:restart":
+                Process.Start(new ProcessStartInfo("shutdown", "/r /t 0") { CreateNoWindow = true, UseShellExecute = false });
+                break;
+            case "cmd:shutdown":
+                Process.Start(new ProcessStartInfo("shutdown", "/s /t 0") { CreateNoWindow = true, UseShellExecute = false });
+                break;
+            case "cmd:theme-dark":
+                ApplyUpdatedSettings(_settings with { Theme = ThemeMode.Dark });
+                break;
+            case "cmd:theme-light":
+                ApplyUpdatedSettings(_settings with { Theme = ThemeMode.Light });
+                break;
+            case "cmd:theme-system":
+                ApplyUpdatedSettings(_settings with { Theme = ThemeMode.System });
+                break;
+            case "cmd:empty-bin":
+                _recycleBinService?.Empty(0);
+                RefreshDockItems();
+                break;
+            case "cmd:settings":
+                OpenQuickSettings();
+                break;
+            case "cmd:win-settings":
+                try { Process.Start(new ProcessStartInfo("ms-settings:") { UseShellExecute = true }); } catch { }
+                break;
+            case "cmd:restore-taskbar":
+                CleanupSafe();
+                Shutdown(0);
+                break;
+        }
     }
 
     private void OpenQuickSettings()
@@ -307,11 +459,6 @@ public partial class App : Application
                 Shutdown(0);
             });
         _settingsWindow.Show();
-    }
-
-    private static void ShowPhase2Notice(string message)
-    {
-        MessageBox.Show(message, "GlassShell", MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
     private void LaunchWatchdog()
@@ -372,6 +519,9 @@ public partial class App : Application
 
         try { _periodicRefreshTimer?.Stop(); } catch { }
         try { _foregroundReconcileTimer?.Stop(); } catch { }
+        try { _indexRefreshTimer?.Stop(); } catch { }
+        try { _winKeyHook?.Dispose(); } catch { }
+        try { _hotkeyManager?.Dispose(); } catch { }
         try { _windowTracker?.Dispose(); } catch { }
         try { _menuCoordinator?.Dispose(); } catch { }
         try
@@ -403,4 +553,19 @@ public partial class App : Application
         CleanupSafe();
         base.OnExit(e);
     }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct POINT { public int X; public int Y; }
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetCursorPos(out POINT lpPoint);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool LockWorkStation();
+
+    [DllImport("powrprof.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetSuspendState([MarshalAs(UnmanagedType.Bool)] bool hibernate, [MarshalAs(UnmanagedType.Bool)] bool forceCritical, [MarshalAs(UnmanagedType.Bool)] bool disableWakeEvent);
 }
