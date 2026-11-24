@@ -30,13 +30,44 @@ public sealed class WindowTracker : IWindowTracker
     private const uint GW_OWNER = 4;
     private const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
 
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, string> DisplayNameCache = new(StringComparer.OrdinalIgnoreCase);
+
     private readonly uint _selfProcessId = (uint)Environment.ProcessId;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<uint, byte> _flashingPids = new();
     private readonly List<nint> _hooks = [];
     private WinEventDelegate? _hookDelegate;
     private bool _started;
 
+    public void MarkWindowFlashing(nint hwnd)
+    {
+        if (hwnd == 0) return;
+        GetWindowThreadProcessId(hwnd, out uint pid);
+        if (pid != 0 && pid != _selfProcessId)
+        {
+            _flashingPids[pid] = 1;
+            WindowsChanged?.Invoke();
+        }
+    }
+
+    public void MarkProcessFlashing(uint pid)
+    {
+        if (pid != 0 && pid != _selfProcessId && _flashingPids.TryAdd(pid, 1))
+        {
+            WindowsChanged?.Invoke();
+        }
+    }
+
+    public void ClearProcessFlashing(uint pid)
+    {
+        if (pid != 0 && _flashingPids.TryRemove(pid, out _))
+        {
+            WindowsChanged?.Invoke();
+        }
+    }
+
     public event Action? WindowsChanged;
     public event Action<ForegroundWindowInfo>? ForegroundChanged;
+    public event Action<nint>? WindowMinimizing;
     public event Action? TaskbarShownDetected;
 
     public void Start()
@@ -65,6 +96,48 @@ public sealed class WindowTracker : IWindowTracker
     }
 
     public void Dispose() => Stop();
+
+    public readonly record struct VisibleWindowBounds(ScreenRect Bounds, bool IsMaximized);
+
+    /// <summary>
+    /// Ultra-lightweight bounds enumeration for per-monitor fullscreen/maximize checks:
+    /// zero OpenProcess, zero QueryFullProcessImageName, zero FileVersionInfo disk I/O.
+    /// </summary>
+    public IReadOnlyList<VisibleWindowBounds> GetVisibleWindowBounds()
+    {
+        var result = new List<VisibleWindowBounds>(16);
+        EnumWindows((hwnd, _) =>
+        {
+            if (!IsWindowVisible(hwnd) || IsIconic(hwnd)) return true;
+
+            GetWindowThreadProcessId(hwnd, out uint pid);
+            if (pid == 0 || pid == _selfProcessId) return true;
+
+            int exStyle = GetWindowLongW(hwnd, GWL_EXSTYLE);
+            if ((exStyle & WS_EX_TOOLWINDOW) != 0 || (exStyle & WS_EX_NOACTIVATE) != 0) return true;
+
+            if (GetWindow(hwnd, GW_OWNER) != 0 && (exStyle & WS_EX_APPWINDOW) == 0) return true;
+            if (IsCloaked(hwnd)) return true;
+
+            string className = GetClassName(hwnd);
+            if (className is "Progman" or "WorkerW" or "Shell_TrayWnd" or "Shell_SecondaryTrayWnd" or "Windows.UI.Core.CoreWindow")
+            {
+                return true;
+            }
+
+            if (GetWindowRect(hwnd, out RECT rc))
+            {
+                int w = rc.Right - rc.Left;
+                int h = rc.Bottom - rc.Top;
+                if (w > 40 && h > 40)
+                {
+                    result.Add(new VisibleWindowBounds(new ScreenRect(rc.Left, rc.Top, rc.Right, rc.Bottom), IsZoomed(hwnd)));
+                }
+            }
+            return true;
+        }, 0);
+        return result;
+    }
 
     public IReadOnlyList<WindowInfo> GetTopLevelWindows()
     {
@@ -95,8 +168,9 @@ public sealed class WindowTracker : IWindowTracker
         string procName = string.IsNullOrEmpty(exePath) ? string.Empty : Path.GetFileNameWithoutExtension(exePath);
         GetWindowRect(hwnd, out RECT rc);
         bool minimized = IsIconic(hwnd);
+        bool maximized = IsZoomed(hwnd);
         bool cloaked = IsCloaked(hwnd);
-        return new ForegroundWindowInfo(hwnd, pid, className, procName, new(rc.Left, rc.Top, rc.Right, rc.Bottom), minimized, cloaked, title);
+        return new ForegroundWindowInfo(hwnd, pid, className, procName, new(rc.Left, rc.Top, rc.Right, rc.Bottom), minimized, cloaked, title, maximized);
     }
 
     public static bool ActivateWindow(nint hwnd)
@@ -117,7 +191,7 @@ public sealed class WindowTracker : IWindowTracker
 
     private void OnWinEvent(nint hWinEventHook, uint eventType, nint hwnd, int idObject, int idChild, uint dwEventThread, uint dwmsEventTime)
     {
-        if (hwnd == 0 || idObject != 0) return;
+        if (hwnd == 0 || idObject != 0 || idChild != 0) return;
 
         if (eventType == EVENT_OBJECT_SHOW)
         {
@@ -129,6 +203,13 @@ public sealed class WindowTracker : IWindowTracker
             return;
         }
 
+        if (eventType == EVENT_SYSTEM_MINIMIZESTART)
+        {
+            WindowMinimizing?.Invoke(hwnd);
+            WindowsChanged?.Invoke();
+            return;
+        }
+
         if (eventType is EVENT_SYSTEM_FOREGROUND or EVENT_SYSTEM_MOVESIZEEND or EVENT_SYSTEM_MINIMIZEEND)
         {
             var fg = GetForegroundWindowInfo();
@@ -136,6 +217,12 @@ public sealed class WindowTracker : IWindowTracker
             WindowsChanged?.Invoke();
             return;
         }
+
+        // Filter out child controls, tooltips, and invisible helper HWNDs so EVENT_OBJECT_CREATE/HIDE/NAMECHANGE
+        // never spam Dock refreshes dozens of times per second!
+        if (GetAncestor(hwnd, 2 /* GA_ROOT */) != hwnd) return;
+        int exStyle = GetWindowLongW(hwnd, GWL_EXSTYLE);
+        if ((exStyle & WS_EX_TOOLWINDOW) != 0 || (exStyle & WS_EX_NOACTIVATE) != 0) return;
 
         WindowsChanged?.Invoke();
     }
@@ -169,21 +256,41 @@ public sealed class WindowTracker : IWindowTracker
         if (string.IsNullOrWhiteSpace(exePath)) return false;
 
         string appName = ResolveDisplayName(exePath);
-        info = new WindowInfo(hwnd, pid, exePath, appName, title, className, IsIconic(hwnd), IsFlashing: false);
+        GetWindowRect(hwnd, out RECT rc);
+        var bounds = new ScreenRect(rc.Left, rc.Top, rc.Right, rc.Bottom);
+        info = new WindowInfo(
+            hwnd,
+            pid,
+            exePath,
+            appName,
+            title,
+            className,
+            IsIconic(hwnd),
+            IsFlashing: _flashingPids.ContainsKey(pid),
+            IsMaximized: IsZoomed(hwnd),
+            Bounds: bounds);
         return true;
     }
 
     private static string ResolveDisplayName(string exePath)
     {
-        try
+        if (DisplayNameCache.Count > 512)
         {
-            var vi = FileVersionInfo.GetVersionInfo(exePath);
-            if (!string.IsNullOrWhiteSpace(vi.FileDescription)) return vi.FileDescription.Trim();
-            if (!string.IsNullOrWhiteSpace(vi.ProductName)) return vi.ProductName.Trim();
+            DisplayNameCache.Clear();
         }
-        catch { }
 
-        return Path.GetFileNameWithoutExtension(exePath);
+        return DisplayNameCache.GetOrAdd(exePath, static path =>
+        {
+            try
+            {
+                var vi = FileVersionInfo.GetVersionInfo(path);
+                if (!string.IsNullOrWhiteSpace(vi.FileDescription)) return vi.FileDescription.Trim();
+                if (!string.IsNullOrWhiteSpace(vi.ProductName)) return vi.ProductName.Trim();
+            }
+            catch { }
+
+            return Path.GetFileNameWithoutExtension(path);
+        });
     }
 
     private static bool IsCloaked(nint hwnd)
@@ -253,6 +360,10 @@ public sealed class WindowTracker : IWindowTracker
     private static extern bool IsIconic(nint hwnd);
 
     [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool IsZoomed(nint hwnd);
+
+    [DllImport("user32.dll")]
     private static extern nint GetForegroundWindow();
 
     [DllImport("user32.dll")]
@@ -269,6 +380,9 @@ public sealed class WindowTracker : IWindowTracker
 
     [DllImport("user32.dll")]
     private static extern nint GetWindow(nint hwnd, uint uCmd);
+
+    [DllImport("user32.dll")]
+    private static extern nint GetAncestor(nint hwnd, uint gaFlags);
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern int GetWindowLongW(nint hwnd, int nIndex);

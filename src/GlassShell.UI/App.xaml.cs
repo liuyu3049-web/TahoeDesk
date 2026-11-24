@@ -3,17 +3,23 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using GlassShell.Core.Config;
 using GlassShell.Core.Discovery;
 using GlassShell.Core.MenuEngine;
+using GlassShell.Core.Search;
 using GlassShell.Core.Shell;
 using GlassShell.UI.Dock;
 using GlassShell.UI.Glass;
+using GlassShell.UI.Launchpad;
 using GlassShell.UI.MenuBar;
 using GlassShell.UI.Settings;
+using GlassShell.UI.Spotlight;
 using GlassShell.UI.Tray;
 using Microsoft.Win32;
 
@@ -33,15 +39,26 @@ public partial class App : Application
     private ForegroundMenuCoordinator? _menuCoordinator;
     private DxgiBackdropSampler? _backdropSampler;
     private TrayProxyHost? _trayProxyHost;
+    private LowLevelWinKeyHook? _winKeyHook;
+    private GlobalHotkeyManager? _hotkeyManager;
     private RecycleBinService? _recycleBinService;
+    private readonly WindowSnapshotCache<BitmapSource> _snapshotCache = new(16);
     private readonly List<DisplayShellPair> _shells = [];
+    private LaunchpadWindow? _launchpadWindow;
+    private SpotlightWindow? _spotlightWindow;
     private QuickSettingsWindow? _settingsWindow;
+    private IReadOnlyList<InstalledAppEntry> _cachedApps = [];
+    private IReadOnlyList<IndexedFileEntry> _cachedFiles = [];
     private DispatcherTimer? _periodicRefreshTimer;
     private DispatcherTimer? _foregroundReconcileTimer;
+    private DispatcherTimer? _indexRefreshTimer;
     private nint _lastForegroundHwnd;
     private string _lastForegroundTitle = string.Empty;
     private readonly LinkedList<string> _recentApps = new();
     private readonly List<string> _stableRunningOrder = [];
+    private readonly object _dockStateGate = new();
+    private DispatcherTimer? _dockDebounceTimer;
+    private int _dockRefreshInFlight;
     private bool _cleanedUp;
 
     protected override void OnStartup(StartupEventArgs e)
@@ -62,9 +79,14 @@ public partial class App : Application
             return;
         }
 
-        AppDomain.CurrentDomain.UnhandledException += (_, _) => CleanupSafe();
+        AppDomain.CurrentDomain.UnhandledException += (_, args) =>
+        {
+            LogCrash("AppDomain", args.ExceptionObject as Exception);
+            CleanupSafe();
+        };
         DispatcherUnhandledException += (_, args) =>
         {
+            LogCrash("Dispatcher", args.Exception);
             CleanupSafe();
             args.Handled = false;
         };
@@ -80,6 +102,20 @@ public partial class App : Application
             _settings = SeedDefaultPins(_settings);
             _settingsStore.Save(_settings);
         }
+        else if (_settings.SettingsSchemaVersion < 3)
+        {
+            // One-time v3 defaults migration: hide Dock on maximized/fullscreen (NOT floating overlap), hide redundant MenuBar Wi-Fi
+            _settings = _settings with
+            {
+                SettingsSchemaVersion = 3,
+                DockAutoHide = DockAutoHideMode.Smart,
+                ShowMenuBarWifiIcon = false,
+                ShowMinimizedWindowsInDock = false
+            };
+            _settingsStore.Save(_settings);
+        }
+
+        EnsureNativeMinimizeAnimationEnabled();
 
         var monitors = MonitorContext.GetAllMonitors();
         bool isDark = ResolveIsDarkMode(_settings);
@@ -90,6 +126,13 @@ public partial class App : Application
         _recycleBinService = new RecycleBinService();
         _backdropSampler = new DxgiBackdropSampler();
         _trayProxyHost = new TrayProxyHost();
+        _winKeyHook = new LowLevelWinKeyHook { Enabled = _settings.InterceptWinKeyForLaunchpad };
+        _hotkeyManager = new GlobalHotkeyManager();
+
+        _launchpadWindow = new LaunchpadWindow(_backdropSampler);
+        _launchpadWindow.RescanRequested += () => _ = RefreshSearchAndLaunchpadIndexAsync();
+        _spotlightWindow = new SpotlightWindow(_backdropSampler, _settings, isDark);
+        _spotlightWindow.SystemCommandRequested += HandleSpotlightSystemCommand;
 
         var extractors = new IMenuExtractor[]
         {
@@ -103,8 +146,8 @@ public partial class App : Application
 
         foreach (var monitor in monitors)
         {
-            var menuBar = new MenuBarWindow(monitor, _taskbarController, _windowTracker, _backdropSampler, _trayProxyHost, _settings, isDark);
-            var dock = new DockWindow(monitor, _backdropSampler, _settings, isDark);
+            var menuBar = new MenuBarWindow(monitor, _taskbarController, _windowTracker, _backdropSampler, _trayProxyHost, _settings, isDark, _hotkeyManager);
+            var dock = new DockWindow(monitor, _backdropSampler, _settings, isDark, _snapshotCache);
 
             menuBar.SettingsRequested += OpenQuickSettings;
             menuBar.SettingsUpdated += ApplyUpdatedSettings;
@@ -113,10 +156,10 @@ public partial class App : Application
                 CleanupSafe();
                 Shutdown(0);
             };
-            menuBar.SpotlightRequested += () => ShowPhase2Notice("聚焦搜索 (Spotlight) 将在阶段二启用");
-            menuBar.ControlCenterRequested += () => ShowPhase2Notice("控制中心 (Control Center) 将在阶段二启用");
+            menuBar.SpotlightRequested += () => ToggleSpotlight(monitor);
+            menuBar.WindowFlashDetected += hwnd => _windowTracker.MarkWindowFlashing(hwnd);
 
-            dock.LaunchpadRequested += () => ShowPhase2Notice("启动台 (Launchpad) 将在阶段二启用");
+            dock.LaunchpadRequested += () => ToggleLaunchpad(monitor);
             dock.SettingsUpdated += ApplyUpdatedSettings;
 
             menuBar.Show();
@@ -146,7 +189,8 @@ public partial class App : Application
 
         _windowTracker.TaskbarShownDetected += () => _taskbarController.HandleTaskbarShownEvent();
         _windowTracker.ForegroundChanged += OnForegroundChanged;
-        _windowTracker.WindowsChanged += () => Dispatcher.InvokeAsync(RefreshDockItems);
+        _windowTracker.WindowMinimizing += OnWindowMinimizing;
+        _windowTracker.WindowsChanged += ScheduleDockRefresh;
 
         // Acquire taskbar suppression + primary top AppBar matching MenuBar height 1:1
         var primary = _shells.FirstOrDefault(s => s.Monitor.IsPrimary) ?? _shells[0];
@@ -160,6 +204,11 @@ public partial class App : Application
             }
         }
 
+        // Register global Spotlight hotkey (Alt+Space) on primary MenuBar HWND and start Win-key Launchpad hook
+        _hotkeyManager.Register(primary.MenuBar.Hwnd, id: 1, _settings.SpotlightHotkey, () => ToggleSpotlight(GetCursorMonitor()));
+        _winKeyHook.SingleWinPressed += () => Dispatcher.InvokeAsync(() => ToggleLaunchpad(GetCursorMonitor()));
+        _winKeyHook.Start();
+
         _windowTracker.Start();
 
         // Start zero-injection Shell_TrayWnd tray proxy AFTER AppBar registration so SHAppBarMessage hits Explorer cleanly
@@ -167,29 +216,108 @@ public partial class App : Application
         {
             foreach (var s in _shells) s.MenuBar.UpdateTrayItems(items);
         });
+        _trayProxyHost.TrayIconFlashingDetected += pid => _windowTracker.MarkProcessFlashing(pid);
         _trayProxyHost.Start();
 
-        RefreshDockItems();
-        OnForegroundChanged(_windowTracker.GetForegroundWindowInfo());
+        _dockDebounceTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(180) };
+        _dockDebounceTimer.Tick += (_, _) =>
+        {
+            _dockDebounceTimer.Stop();
+            _ = RefreshDockItemsAsync();
+        };
 
-        _periodicRefreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
-        _periodicRefreshTimer.Tick += (_, _) => RefreshDockItems();
+        _ = RefreshDockItemsAsync();
+        OnForegroundChanged(_windowTracker.GetForegroundWindowInfo());
+        _ = RefreshSearchAndLaunchpadIndexAsync();
+
+        _periodicRefreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
+        _periodicRefreshTimer.Tick += (_, _) => _ = RefreshDockItemsAsync();
         _periodicRefreshTimer.Start();
 
-        _foregroundReconcileTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
-        _foregroundReconcileTimer.Tick += (_, _) => ReconcileForegroundWindow();
+        _foregroundReconcileTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(350) };
+        _foregroundReconcileTimer.Tick += (_, _) => ReconcileForegroundAndMonitorVisibility();
         _foregroundReconcileTimer.Start();
+
+        _indexRefreshTimer = new DispatcherTimer { Interval = TimeSpan.FromMinutes(3) };
+        _indexRefreshTimer.Tick += (_, _) => _ = RefreshSearchAndLaunchpadIndexAsync();
+        _indexRefreshTimer.Start();
     }
 
-    private void ReconcileForegroundWindow()
+    private void ReconcileForegroundAndMonitorVisibility()
     {
         if (_windowTracker is null) return;
         var fg = _windowTracker.GetForegroundWindowInfo();
-        if (fg.Hwnd == 0 || fg.ProcessId == (uint)Environment.ProcessId) return;
-
-        if (fg.Hwnd != _lastForegroundHwnd || !string.Equals(fg.WindowTitle, _lastForegroundTitle, StringComparison.Ordinal))
+        if (fg.Hwnd != 0 && fg.ProcessId != (uint)Environment.ProcessId)
         {
-            OnForegroundChanged(fg);
+            if (fg.Hwnd != _lastForegroundHwnd || !string.Equals(fg.WindowTitle, _lastForegroundTitle, StringComparison.Ordinal))
+            {
+                OnForegroundChanged(fg);
+            }
+        }
+
+        // Always evaluate per-monitor fullscreen & maximize states independently (catches maximize/un-maximize on same HWND!)
+        EvaluatePerMonitorVisibility(fg);
+    }
+
+    private void EvaluatePerMonitorVisibility(ForegroundWindowInfo fg)
+    {
+        if (_windowTracker is null || _taskbarNative is null || _shells.Count == 0) return;
+
+        bool d3dFs = _taskbarNative.IsD3DFullscreenActive();
+        var visibleWindows = _windowTracker.GetVisibleWindowBounds();
+        bool primaryFullscreen = false;
+
+        foreach (var s in _shells)
+        {
+            var mon = s.Monitor;
+            bool monFullscreen = false;
+            bool monMaximized = false;
+
+            foreach (var w in visibleWindows)
+            {
+                int cx = (w.Bounds.Left + w.Bounds.Right) / 2;
+                int cy = (w.Bounds.Top + w.Bounds.Bottom) / 2;
+                if (cx < mon.Bounds.Left || cx >= mon.Bounds.Right || cy < mon.Bounds.Top || cy >= mon.Bounds.Bottom)
+                {
+                    continue;
+                }
+
+                // True fullscreen covers entire monitor bounds within 2px tolerance
+                if (w.Bounds.Left <= mon.Bounds.Left + 2
+                    && w.Bounds.Top <= mon.Bounds.Top + 2
+                    && w.Bounds.Right >= mon.Bounds.Right - 2
+                    && w.Bounds.Bottom >= mon.Bounds.Bottom - 2)
+                {
+                    monFullscreen = true;
+                }
+
+                if (w.IsMaximized)
+                {
+                    monMaximized = true;
+                }
+            }
+
+            if (mon.IsPrimary && d3dFs && fg.Hwnd != 0 && !fg.IsMinimized)
+            {
+                int fcx = (fg.Bounds.Left + fg.Bounds.Right) / 2;
+                int fcy = (fg.Bounds.Top + fg.Bounds.Bottom) / 2;
+                if (fcx >= mon.Bounds.Left && fcx < mon.Bounds.Right && fcy >= mon.Bounds.Top && fcy < mon.Bounds.Bottom)
+                {
+                    monFullscreen = true;
+                }
+            }
+
+            if (mon.IsPrimary) primaryFullscreen = monFullscreen;
+
+            var vis = monFullscreen ? Visibility.Collapsed : Visibility.Visible;
+            if (s.MenuBar.Visibility != vis) s.MenuBar.Visibility = vis;
+            if (s.Dock.Visibility != vis) s.Dock.Visibility = vis;
+            s.Dock.SetBottomOverlap(monMaximized || monFullscreen);
+        }
+
+        if (_winKeyHook is not null)
+        {
+            _winKeyHook.IsFullscreenActive = primaryFullscreen;
         }
     }
 
@@ -203,6 +331,12 @@ public partial class App : Application
             return;
         }
 
+        // User switched to this app -> clear any unread/flashing Dock badge for it!
+        if (fg.ProcessId != 0)
+        {
+            _windowTracker?.ClearProcessFlashing(fg.ProcessId);
+        }
+
         if (fg.Hwnd != _lastForegroundHwnd)
         {
             foreach (var s in _shells)
@@ -214,24 +348,7 @@ public partial class App : Application
         _lastForegroundHwnd = fg.Hwnd;
         _lastForegroundTitle = fg.WindowTitle;
 
-        // Evaluate fullscreen & bottom overlap per monitor
-        bool anyFullscreen = false;
-        bool d3dFs = _taskbarNative.IsD3DFullscreenActive();
-        foreach (var s in _shells)
-        {
-            bool isFs = FullscreenDetector.IsFullscreen(fg, s.Monitor, d3dFs);
-            if (isFs) anyFullscreen = true;
-
-            if (fg.Hwnd != 0 && !fg.IsMinimized && !fg.IsCloaked)
-            {
-                bool onThisMonitor = fg.Bounds.Right > s.Monitor.Bounds.Left && fg.Bounds.Left < s.Monitor.Bounds.Right;
-                bool overlapsBottom = onThisMonitor
-                    && fg.ClassName is not ("Progman" or "WorkerW" or "Shell_TrayWnd" or "Shell_SecondaryTrayWnd")
-                    && fg.Bounds.Bottom >= s.Monitor.Bounds.Bottom - (int)(84 * s.Monitor.DpiScale);
-                Dispatcher.InvokeAsync(() => s.Dock.SetBottomOverlap(overlapsBottom));
-            }
-        }
-        _taskbarController.UpdateFullscreenState(anyFullscreen);
+        EvaluatePerMonitorVisibility(fg);
 
         if (_menuCoordinator is not null && fg.Hwnd != 0)
         {
@@ -240,37 +357,76 @@ public partial class App : Application
         }
     }
 
-    private void RefreshDockItems()
+    private void ScheduleDockRefresh()
     {
-        if (_windowTracker is null || _recycleBinService is null || _shells.Count == 0) return;
-
-        var windows = _windowTracker.GetTopLevelWindows();
-        var activeExes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var w in windows)
+        Dispatcher.BeginInvoke(() =>
         {
-            if (string.IsNullOrWhiteSpace(w.ExecutablePath)) continue;
-            activeExes.Add(w.ExecutablePath);
+            if (_dockDebounceTimer is null || _cleanedUp) return;
+            _dockDebounceTimer.Stop();
+            _dockDebounceTimer.Start();
+        });
+    }
 
-            if (!_stableRunningOrder.Any(p => string.Equals(p, w.ExecutablePath, StringComparison.OrdinalIgnoreCase)))
-            {
-                _stableRunningOrder.Add(w.ExecutablePath);
-            }
+    private void RefreshDockItems() => _ = RefreshDockItemsAsync();
 
-            if (!_recentApps.Any(p => string.Equals(p, w.ExecutablePath, StringComparison.OrdinalIgnoreCase)))
+    private async Task RefreshDockItemsAsync()
+    {
+        if (_windowTracker is null || _recycleBinService is null || _shells.Count == 0 || _cleanedUp) return;
+        if (Interlocked.CompareExchange(ref _dockRefreshInFlight, 1, 0) != 0) return;
+
+        var settingsSnapshot = _settings;
+        try
+        {
+            var items = await Task.Run(() =>
             {
-                _recentApps.AddFirst(w.ExecutablePath);
-                while (_recentApps.Count > 12) _recentApps.RemoveLast();
-            }
+                var windows = _windowTracker.GetTopLevelWindows();
+                List<string> recentCopy;
+                List<string> stableCopy;
+
+                lock (_dockStateGate)
+                {
+                    var activeExes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    foreach (var w in windows)
+                    {
+                        if (string.IsNullOrWhiteSpace(w.ExecutablePath)) continue;
+                        activeExes.Add(w.ExecutablePath);
+
+                        if (!_stableRunningOrder.Any(p => string.Equals(p, w.ExecutablePath, StringComparison.OrdinalIgnoreCase)))
+                        {
+                            _stableRunningOrder.Add(w.ExecutablePath);
+                        }
+
+                        if (!_recentApps.Any(p => string.Equals(p, w.ExecutablePath, StringComparison.OrdinalIgnoreCase)))
+                        {
+                            _recentApps.AddFirst(w.ExecutablePath);
+                            while (_recentApps.Count > 12) _recentApps.RemoveLast();
+                        }
+                    }
+
+                    _stableRunningOrder.RemoveAll(p => !activeExes.Contains(p));
+                    recentCopy = _recentApps.ToList();
+                    stableCopy = _stableRunningOrder.ToList();
+                }
+
+                if (settingsSnapshot.ShowMinimizedWindowsInDock)
+                {
+                    var minimizedHwnds = new HashSet<nint>(windows.Where(w => w.IsMinimized).Select(w => w.Hwnd));
+                    _snapshotCache.Prune(minimizedHwnds);
+                }
+
+                var rb = _recycleBinService.Query();
+                return DockModelCoordinator.BuildDockItems(settingsSnapshot, windows, recentCopy, rb, stableCopy);
+            });
+
+            await Dispatcher.InvokeAsync(() =>
+            {
+                foreach (var s in _shells) s.Dock.UpdateItems(items);
+            });
         }
-
-        // Remove apps from stable order only once all their windows have closed
-        _stableRunningOrder.RemoveAll(p => !activeExes.Contains(p));
-
-        var rb = _recycleBinService.Query();
-        var items = DockModelCoordinator.BuildDockItems(_settings, windows, _recentApps.ToList(), rb, _stableRunningOrder);
-        foreach (var s in _shells)
+        catch { }
+        finally
         {
-            s.Dock.UpdateItems(items);
+            Interlocked.Exchange(ref _dockRefreshInFlight, 0);
         }
     }
 
@@ -279,12 +435,172 @@ public partial class App : Application
         _settings = updated;
         _settingsStore?.Save(updated);
         bool isDark = ResolveIsDarkMode(updated);
+        if (_winKeyHook is not null)
+        {
+            _winKeyHook.Enabled = updated.InterceptWinKeyForLaunchpad;
+        }
+        _spotlightWindow?.ApplySettings(updated, isDark);
         foreach (var s in _shells)
         {
             s.MenuBar.ApplySettings(updated, isDark);
             s.Dock.ApplySettings(updated, isDark);
         }
         RefreshDockItems();
+    }
+
+    private void OnWindowMinimizing(nint hwnd)
+    {
+        if (!_settings.ShowMinimizedWindowsInDock) return;
+        var snap = WindowThumbnailCapturer.CaptureThumbnail(hwnd);
+        if (snap is not null)
+        {
+            _snapshotCache.Put(hwnd, snap);
+        }
+    }
+
+    private static void EnsureNativeMinimizeAnimationEnabled()
+    {
+        try
+        {
+            var info = new ANIMATIONINFO { cbSize = (uint)Marshal.SizeOf<ANIMATIONINFO>() };
+            if (SystemParametersInfoW(0x0048 /* SPI_GETANIMATION */, info.cbSize, ref info, 0) && info.iMinAnimate == 0)
+            {
+                info.iMinAnimate = 1;
+                SystemParametersInfoW(0x0049 /* SPI_SETANIMATION */, info.cbSize, ref info, 0x0002 /* SPIF_SENDCHANGE */);
+            }
+        }
+        catch { }
+    }
+
+    private async Task RefreshSearchAndLaunchpadIndexAsync()
+    {
+        try
+        {
+            var tcs = new TaskCompletionSource<(IReadOnlyList<InstalledAppEntry>, IReadOnlyList<IndexedFileEntry>)>();
+            // Dedicated STA thread so COM IShellLinkW resolves every .lnk shortcut reliably
+            var thread = new Thread(() =>
+            {
+                try
+                {
+                    var apps = InstalledAppScanner.ScanInstalledApps();
+                    var files = InstalledAppScanner.ScanLocalUserFiles(maxFiles: 300);
+                    tcs.TrySetResult((apps, files));
+                }
+                catch (Exception ex)
+                {
+                    tcs.TrySetException(ex);
+                }
+            });
+            thread.SetApartmentState(ApartmentState.STA);
+            thread.IsBackground = true;
+            thread.Start();
+
+            var (apps, files) = await tcs.Task;
+
+            _cachedApps = apps;
+            _cachedFiles = files;
+
+            await Dispatcher.InvokeAsync(() =>
+            {
+                _spotlightWindow?.UpdateIndex(apps, files);
+                _launchpadWindow?.SyncApps(apps);
+            });
+        }
+        catch (Exception ex)
+        {
+            LogCrash("IndexRefresh", ex);
+        }
+    }
+
+    private static void LogCrash(string source, Exception? ex)
+    {
+        try
+        {
+            string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "GlassShell");
+            Directory.CreateDirectory(dir);
+            File.AppendAllText(Path.Combine(dir, "crash.log"), $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] [{source}] {ex}\r\n");
+        }
+        catch { }
+    }
+
+    private void ToggleLaunchpad(MonitorContext monitor)
+    {
+        if (_spotlightWindow is { IsVisible: true }) _spotlightWindow.Hide();
+        foreach (var s in _shells)
+        {
+            s.MenuBar.DismissPopups();
+            s.Dock.DismissPopups();
+        }
+        _launchpadWindow?.ToggleOnMonitor(monitor, _cachedApps);
+    }
+
+    private void ToggleSpotlight(MonitorContext monitor)
+    {
+        if (_launchpadWindow is { IsVisible: true }) _launchpadWindow.DismissSmooth();
+        foreach (var s in _shells)
+        {
+            s.MenuBar.DismissPopups();
+            s.Dock.DismissPopups();
+        }
+        _spotlightWindow?.ToggleOnMonitor(monitor);
+    }
+
+    private MonitorContext GetCursorMonitor()
+    {
+        if (GetCursorPos(out POINT pt))
+        {
+            foreach (var s in _shells)
+            {
+                var b = s.Monitor.Bounds;
+                if (pt.X >= b.Left && pt.X < b.Right && pt.Y >= b.Top && pt.Y < b.Bottom)
+                {
+                    return s.Monitor;
+                }
+            }
+        }
+        return (_shells.FirstOrDefault(s => s.Monitor.IsPrimary) ?? _shells[0]).Monitor;
+    }
+
+    private void HandleSpotlightSystemCommand(string commandId)
+    {
+        switch (commandId)
+        {
+            case "cmd:lock":
+                LockWorkStation();
+                break;
+            case "cmd:sleep":
+                SetSuspendState(false, false, false);
+                break;
+            case "cmd:restart":
+                Process.Start(new ProcessStartInfo("shutdown", "/r /t 0") { CreateNoWindow = true, UseShellExecute = false });
+                break;
+            case "cmd:shutdown":
+                Process.Start(new ProcessStartInfo("shutdown", "/s /t 0") { CreateNoWindow = true, UseShellExecute = false });
+                break;
+            case "cmd:theme-dark":
+                ApplyUpdatedSettings(_settings with { Theme = ThemeMode.Dark });
+                break;
+            case "cmd:theme-light":
+                ApplyUpdatedSettings(_settings with { Theme = ThemeMode.Light });
+                break;
+            case "cmd:theme-system":
+                ApplyUpdatedSettings(_settings with { Theme = ThemeMode.System });
+                break;
+            case "cmd:empty-bin":
+                _recycleBinService?.Empty(0);
+                RefreshDockItems();
+                break;
+            case "cmd:settings":
+                OpenQuickSettings();
+                break;
+            case "cmd:win-settings":
+                try { Process.Start(new ProcessStartInfo("ms-settings:") { UseShellExecute = true }); } catch { }
+                break;
+            case "cmd:restore-taskbar":
+                CleanupSafe();
+                Shutdown(0);
+                break;
+        }
     }
 
     private void OpenQuickSettings()
@@ -307,11 +623,6 @@ public partial class App : Application
                 Shutdown(0);
             });
         _settingsWindow.Show();
-    }
-
-    private static void ShowPhase2Notice(string message)
-    {
-        MessageBox.Show(message, "GlassShell", MessageBoxButton.OK, MessageBoxImage.Information);
     }
 
     private void LaunchWatchdog()
@@ -372,6 +683,10 @@ public partial class App : Application
 
         try { _periodicRefreshTimer?.Stop(); } catch { }
         try { _foregroundReconcileTimer?.Stop(); } catch { }
+        try { _indexRefreshTimer?.Stop(); } catch { }
+        try { _dockDebounceTimer?.Stop(); } catch { }
+        try { _winKeyHook?.Dispose(); } catch { }
+        try { _hotkeyManager?.Dispose(); } catch { }
         try { _windowTracker?.Dispose(); } catch { }
         try { _menuCoordinator?.Dispose(); } catch { }
         try
@@ -403,4 +718,26 @@ public partial class App : Application
         CleanupSafe();
         base.OnExit(e);
     }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct POINT { public int X; public int Y; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ANIMATIONINFO { public uint cbSize; public int iMinAnimate; }
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SystemParametersInfoW(uint uiAction, uint uiParam, ref ANIMATIONINFO pvParam, uint fWinIni);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetCursorPos(out POINT lpPoint);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool LockWorkStation();
+
+    [DllImport("powrprof.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetSuspendState([MarshalAs(UnmanagedType.Bool)] bool hibernate, [MarshalAs(UnmanagedType.Bool)] bool forceCritical, [MarshalAs(UnmanagedType.Bool)] bool disableWakeEvent);
 }

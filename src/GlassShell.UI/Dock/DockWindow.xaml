@@ -51,38 +51,42 @@
                 Margin="0,0,0,10"
                 Background="{x:Null}" />
 
-        <!-- In-window zero-HWND tooltip pill positioned via TranslateTransform (ZERO Win32 Popup SetWindowPos stalls!) -->
+        <!-- Fixed-width 320-DIP centering wrapper guarantees 100.0% dead-center tooltip alignment over EVERY icon! -->
         <Canvas x:Name="TooltipCanvas"
                 HorizontalAlignment="Stretch"
                 VerticalAlignment="Bottom"
                 Height="150"
                 Margin="0,0,0,10"
                 IsHitTestVisible="False">
-            <StackPanel x:Name="InlineTooltip"
-                        HorizontalAlignment="Center"
-                        Opacity="0"
-                        IsHitTestVisible="False">
-                <StackPanel.RenderTransform>
+            <Grid x:Name="InlineTooltipAnchor"
+                  Width="320"
+                  Opacity="0"
+                  IsHitTestVisible="False">
+                <Grid.RenderTransform>
                     <TranslateTransform x:Name="InlineTooltipTranslate" X="0" Y="0" />
-                </StackPanel.RenderTransform>
-                <Border Background="#D81D2028"
-                        BorderBrush="#48FFFFFF"
-                        BorderThickness="0.8"
-                        CornerRadius="7"
-                        Padding="10,4">
-                    <TextBlock x:Name="InlineTooltipText"
-                               Foreground="#F6FFFFFF"
-                               FontSize="12"
-                               FontFamily="Microsoft YaHei UI, Segoe UI"
-                               TextOptions.TextFormattingMode="Ideal"
-                               TextOptions.TextRenderingMode="Grayscale"
-                               HorizontalAlignment="Center" />
-                </Border>
-                <Polygon Points="0,0 10,0 5,5"
-                         Fill="#D81D2028"
-                         HorizontalAlignment="Center"
-                         Margin="0,-0.5,0,0" />
-            </StackPanel>
+                </Grid.RenderTransform>
+                <StackPanel x:Name="InlineTooltip"
+                            HorizontalAlignment="Center"
+                            IsHitTestVisible="False">
+                    <Border Background="#D81D2028"
+                            BorderBrush="#48FFFFFF"
+                            BorderThickness="0.8"
+                            CornerRadius="7"
+                            Padding="10,4">
+                        <TextBlock x:Name="InlineTooltipText"
+                                   Foreground="#F6FFFFFF"
+                                   FontSize="12"
+                                   FontFamily="Microsoft YaHei UI, Segoe UI"
+                                   TextOptions.TextFormattingMode="Ideal"
+                                   TextOptions.TextRenderingMode="Grayscale"
+                                   HorizontalAlignment="Center" />
+                    </Border>
+                    <Polygon Points="0,0 10,0 5,5"
+                             Fill="#D81D2028"
+                             HorizontalAlignment="Center"
+                             Margin="0,-0.5,0,0" />
+                </StackPanel>
+            </Grid>
         </Canvas>
     </Grid>
 </Window>

@@ -42,5 +42,8 @@ public sealed class SystemStatusProviderTests
     {
         Assert.Equal("拼", SystemStatusProvider.MapLangIdToBadge(0x0804));
         Assert.Equal("英", SystemStatusProvider.MapLangIdToBadge(0x0409));
+        Assert.Equal("⇪A", SystemStatusProvider.ResolveImeBadge(0x0804, capsLockOn: true, imeChineseNativeMode: true));
+        Assert.Equal("中", SystemStatusProvider.ResolveImeBadge(0x0804, capsLockOn: false, imeChineseNativeMode: true));
+        Assert.Equal("英", SystemStatusProvider.ResolveImeBadge(0x0804, capsLockOn: false, imeChineseNativeMode: false));
     }
 }

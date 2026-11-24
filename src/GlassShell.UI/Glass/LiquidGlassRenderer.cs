@@ -1,12 +1,10 @@
 using System;
 using System.Diagnostics;
-using System.IO;
 using System.Numerics;
 using System.Runtime.InteropServices;
 using System.Threading;
 using GlassShell.Core.Glass;
 using GlassShell.Core.Shell;
-using Vortice.D3DCompiler;
 using Vortice.Direct3D;
 using Vortice.Direct3D11;
 using Vortice.Direct3D9;
@@ -34,11 +32,6 @@ public sealed class LiquidGlassRenderer : IDisposable
     }
 
     private readonly DxgiBackdropSampler _sampler;
-    private ID3D11VertexShader? _vs;
-    private ID3D11PixelShader? _psBlurH;
-    private ID3D11PixelShader? _psComposite;
-    private ID3D11SamplerState? _linearSampler;
-    private ID3D11Buffer? _constantBuffer;
     private ID3D11Query? _gpuSyncQuery;
 
     // Half-resolution Pass 1 intermediate blur texture (4x faster GPU fill rate)
@@ -59,7 +52,6 @@ public sealed class LiquidGlassRenderer : IDisposable
     private GlassRenderParams _lastRenderedParams;
     private float _lastShadowPad;
     private float _lastActiveBoxWidthPx;
-    private bool _initialized;
     private bool _disposed;
 
     public LiquidGlassRenderer(DxgiBackdropSampler sampler)
@@ -68,6 +60,11 @@ public sealed class LiquidGlassRenderer : IDisposable
     }
 
     public nint SharedD3D9SurfacePtr => _swapSlots[_activeSlotIndex]?.SharedD3d9Surface.NativePointer ?? 0;
+
+    /// <summary>
+    /// Releases per-surface GPU render targets (e.g., when a popup closes) so closed overlays hold 0 bytes of VRAM.
+    /// </summary>
+    public void ReleaseRenderTargets() => DisposeTargets();
 
     public bool RenderSurface(
         ScreenRect surfaceRectPx,
@@ -105,17 +102,19 @@ public sealed class LiquidGlassRenderer : IDisposable
             return false;
         }
 
-        if (!_initialized && !TryInitializePipeline(device))
+        var pipeline = _sampler.GetOrCreateSharedGlassPipeline((uint)Marshal.SizeOf<GlassConstantBuffer>());
+        if (pipeline is null)
         {
             return false;
         }
+
+        _gpuSyncQuery ??= device.CreateQuery(new QueryDescription(Vortice.Direct3D11.QueryType.Event));
 
         if (!EnsureRenderTargets(device, d3d9Device, surfaceRectPx.Width, surfaceRectPx.Height, beforeRecreateTargets))
         {
             return false;
         }
 
-        // Ping-pong to the back slot not currently being read by WPF milcore
         int writeIdx = 1 - _activeSlotIndex;
         var targetSlot = _swapSlots[writeIdx];
         if (targetSlot is null) return false;
@@ -144,17 +143,17 @@ public sealed class LiquidGlassRenderer : IDisposable
                 ActiveBoxWidthPx = activeBoxWidthPx
             };
 
-            ctx.UpdateSubresource(in cb, _constantBuffer!);
+            ctx.UpdateSubresource(in cb, pipeline.ConstantBuffer);
             ctx.IASetPrimitiveTopology(PrimitiveTopology.TriangleList);
             ctx.IASetInputLayout(null);
-            ctx.VSSetShader(_vs);
-            ctx.PSSetConstantBuffer(0, _constantBuffer);
-            ctx.PSSetSampler(0, _linearSampler);
+            ctx.VSSetShader(pipeline.VertexShader);
+            ctx.PSSetConstantBuffer(0, pipeline.ConstantBuffer);
+            ctx.PSSetSampler(0, pipeline.LinearSampler);
 
             // Pass 1 (Half-Res): Horizontal bilinear-Gaussian blur -> _tempBlurTex
             ctx.RSSetViewport(new Vortice.Mathematics.Viewport(0, 0, _tempW, _tempH));
             ctx.OMSetRenderTargets(_tempBlurRtv!);
-            ctx.PSSetShader(_psBlurH);
+            ctx.PSSetShader(pipeline.BlurHPixelShader);
             ctx.PSSetShaderResource(0, srv);
             ctx.Draw(3, 0);
             ctx.PSSetShaderResource(0, null!);
@@ -163,7 +162,7 @@ public sealed class LiquidGlassRenderer : IDisposable
             ctx.RSSetViewport(new Vortice.Mathematics.Viewport(0, 0, surfaceRectPx.Width, surfaceRectPx.Height));
             ctx.OMSetRenderTargets(targetSlot.Rtv);
             ctx.ClearRenderTargetView(targetSlot.Rtv, new Color4(0, 0, 0, 0));
-            ctx.PSSetShader(_psComposite);
+            ctx.PSSetShader(pipeline.CompositePixelShader);
             ctx.PSSetShaderResource(0, _tempBlurSrv!);
             ctx.Draw(3, 0);
             ctx.PSSetShaderResource(0, null!);
@@ -201,48 +200,6 @@ public sealed class LiquidGlassRenderer : IDisposable
         {
             if (sw.ElapsedMilliseconds >= 2) break;
             Thread.SpinWait(64);
-        }
-    }
-
-    private bool TryInitializePipeline(ID3D11Device device)
-    {
-        try
-        {
-            string shaderPath = Path.Combine(AppContext.BaseDirectory, "Glass", "Shaders", "LiquidGlass.hlsl");
-            if (!File.Exists(shaderPath)) return false;
-
-            string hlsl = File.ReadAllText(shaderPath);
-            var vsBlob = Compiler.Compile(hlsl, "VSMain", shaderPath, "vs_5_0");
-            var psBlurBlob = Compiler.Compile(hlsl, "PSBlurH", shaderPath, "ps_5_0");
-            var psCompBlob = Compiler.Compile(hlsl, "PSComposite", shaderPath, "ps_5_0");
-
-            _vs = device.CreateVertexShader(vsBlob.Span);
-            _psBlurH = device.CreatePixelShader(psBlurBlob.Span);
-            _psComposite = device.CreatePixelShader(psCompBlob.Span);
-
-            _linearSampler = device.CreateSamplerState(new SamplerDescription
-            {
-                Filter = Filter.MinMagMipLinear,
-                AddressU = TextureAddressMode.Clamp,
-                AddressV = TextureAddressMode.Clamp,
-                AddressW = TextureAddressMode.Clamp
-            });
-
-            _constantBuffer = device.CreateBuffer(new BufferDescription
-            {
-                ByteWidth = (uint)Marshal.SizeOf<GlassConstantBuffer>(),
-                Usage = ResourceUsage.Default,
-                BindFlags = BindFlags.ConstantBuffer
-            });
-
-            _gpuSyncQuery = device.CreateQuery(new QueryDescription(Vortice.Direct3D11.QueryType.Event));
-
-            _initialized = true;
-            return true;
-        }
-        catch
-        {
-            return false;
         }
     }
 
@@ -368,11 +325,7 @@ public sealed class LiquidGlassRenderer : IDisposable
         _disposed = true;
         DisposeTargets();
         _gpuSyncQuery?.Dispose();
-        _constantBuffer?.Dispose();
-        _linearSampler?.Dispose();
-        _psComposite?.Dispose();
-        _psBlurH?.Dispose();
-        _vs?.Dispose();
+        _gpuSyncQuery = null;
     }
 
     [StructLayout(LayoutKind.Sequential)]

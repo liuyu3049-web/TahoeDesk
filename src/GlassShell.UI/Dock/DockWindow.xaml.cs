@@ -36,13 +36,14 @@ public partial class DockWindow : Window
     private const double CapsuleHorizontalPadDip = 14.0;
 
     private readonly MonitorContext _monitor;
-    private readonly IconExtractor _iconExtractor = new();
     private readonly RecycleBinService _recycleBinService = new();
     private readonly SpringBounceAnimator _bounceAnimator = new();
     private readonly DockHoverAnimator _hoverAnimator = new();
     private readonly DockAutoHideController _autoHideController = new();
     private readonly DxgiBackdropSampler _sampler;
+    private readonly WindowSnapshotCache<BitmapSource>? _snapshotCache;
     private readonly LiquidGlassMenuPopup _contextMenu = new();
+    private readonly FolderStackPopup _folderStackPopup = new();
     private readonly Stopwatch _clock = Stopwatch.StartNew();
 
     private readonly List<DockSlotVisual> _slots = [];
@@ -55,6 +56,7 @@ public partial class DockWindow : Window
     private double? _rawPointerX;
     private bool _pointerActive;
     private double _lastFrameSeconds;
+    private double _lastCursorPollMs;
     private double? _bottomEdgeEnterMs;
     private double _currentSlideY;
     private double _currentCapsuleWidth = 360;
@@ -65,18 +67,18 @@ public partial class DockWindow : Window
     private DockItemModel? _draggingItem;
     private string? _hoveredItemId;
     private string? _lastTooltipText;
-    private double _cachedTooltipW = 64;
-    private double _cachedTooltipH = 28;
 
     public DockWindow(
         MonitorContext monitor,
         DxgiBackdropSampler sampler,
         GlassSettings settings,
-        bool isDarkMode)
+        bool isDarkMode,
+        WindowSnapshotCache<BitmapSource>? snapshotCache = null)
     {
         InitializeComponent();
         _monitor = monitor;
         _sampler = sampler;
+        _snapshotCache = snapshotCache;
         _settings = settings;
         _isDarkMode = isDarkMode;
 
@@ -84,7 +86,13 @@ public partial class DockWindow : Window
         ApplySettings(settings, isDarkMode);
         UpdateCompactWindowBounds(360);
 
-        SourceInitialized += (_, _) => WindowInteropHelperEx.ApplyShellOverlayStyles(new WindowInteropHelper(this).Handle);
+        SourceInitialized += (_, _) =>
+        {
+            var hwnd = new WindowInteropHelper(this).Handle;
+            WindowInteropHelperEx.ApplyShellOverlayStyles(hwnd);
+            _contextMenu.OwnerAnchorHwnd = hwnd;
+            _folderStackPopup.OwnerAnchorHwnd = hwnd;
+        };
         MouseMove += OnDockMouseMove;
         MouseLeave += OnDockMouseLeave;
         DragOver += OnDockDragOver;
@@ -109,6 +117,7 @@ public partial class DockWindow : Window
         CapsuleGlass.OpacityPreset = settings.OpacityPreset;
         CapsuleGlass.IsDarkMode = isDarkMode;
         _contextMenu.ConfigureVisuals(_sampler, settings.OpacityPreset, isDarkMode);
+        _folderStackPopup.ConfigureVisuals(_sampler, settings.OpacityPreset, isDarkMode);
         UpdateCapsuleHeight();
         if (sizeChanged && _lastItems.Count > 0)
         {
@@ -119,7 +128,11 @@ public partial class DockWindow : Window
 
     public void SetYieldForTray(bool yield) => _yieldForTray = yield;
     public void SetBottomOverlap(bool overlap) => _hasBottomOverlap = overlap;
-    public void DismissPopups() => Dispatcher.InvokeAsync(() => _contextMenu.IsOpen = false);
+    public void DismissPopups() => Dispatcher.InvokeAsync(() =>
+    {
+        _contextMenu.IsOpen = false;
+        _folderStackPopup.IsOpen = false;
+    });
 
     public void UpdateItems(IReadOnlyList<DockItemModel> items)
     {
@@ -136,9 +149,8 @@ public partial class DockWindow : Window
 
     private void UpdateCompactWindowBounds(double maxMagnifiedCapsuleWidth)
     {
-        // Keep DockWindow compact (only as wide as max magnified Dock + small headroom)
-        // instead of full 2560px monitor width -> 3-4x faster WPF UpdateLayeredWindow compositing!
-        double targetW = Math.Min(_monitor.WidthDip, Math.Max(340, Math.Ceiling(maxMagnifiedCapsuleWidth + 80)));
+        // Keep DockWindow compact with generous 75-DIP side headroom so outermost icons' tooltips stay 100% centered
+        double targetW = Math.Min(_monitor.WidthDip, Math.Max(380, Math.Ceiling(maxMagnifiedCapsuleWidth + 150)));
         if (Math.Abs(Width - targetW) > 8.0)
         {
             Width = targetW;
@@ -210,6 +222,25 @@ public partial class DockWindow : Window
         var iconScale = new ScaleTransform(1.0, 1.0);
         var slotTranslate = new TranslateTransform(0.0, 0.0);
 
+        var iconGrid = new Grid();
+        iconGrid.Children.Add(iconContent);
+
+        if (model.IsFlashing)
+        {
+            iconGrid.Children.Add(new Ellipse
+            {
+                Width = 11,
+                Height = 11,
+                Fill = new SolidColorBrush(Color.FromRgb(0xFF, 0x3B, 0x30)),
+                Stroke = new SolidColorBrush(Color.FromArgb(0xEE, 0xFF, 0xFF, 0xFF)),
+                StrokeThickness = 1.4,
+                HorizontalAlignment = HorizontalAlignment.Right,
+                VerticalAlignment = VerticalAlignment.Top,
+                Margin = new Thickness(0, 1, 1, 0),
+                IsHitTestVisible = false
+            });
+        }
+
         var iconFrame = new Border
         {
             Width = baseSize,
@@ -218,15 +249,17 @@ public partial class DockWindow : Window
             RenderTransformOrigin = new Point(0.5, 1.0), // Anchor at bottom-center -> scales cleanly UPWARD with zero layout pass!
             RenderTransform = iconScale,
             VerticalAlignment = VerticalAlignment.Top,
-            Child = iconContent
+            Child = iconGrid
         };
 
         var dot = new Ellipse
         {
-            Width = 4.5,
-            Height = 4.5,
-            Fill = new SolidColorBrush(Color.FromArgb(0xEB, 0xFF, 0xFF, 0xFF)),
-            Visibility = model.IsRunning ? Visibility.Visible : Visibility.Hidden,
+            Width = model.IsFlashing ? 5.5 : 4.5,
+            Height = model.IsFlashing ? 5.5 : 4.5,
+            Fill = new SolidColorBrush(model.IsFlashing
+                ? Color.FromRgb(0xFF, 0x45, 0x3A)
+                : Color.FromArgb(0xEB, 0xFF, 0xFF, 0xFF)),
+            Visibility = model.IsRunning || model.IsFlashing ? Visibility.Visible : Visibility.Hidden,
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Bottom,
             Margin = new Thickness(0, 0, 0, 2)
@@ -267,12 +300,18 @@ public partial class DockWindow : Window
         {
             _draggingItem = null;
             e.Handled = true;
-            HandleItemClick(model);
+            HandleItemClick(model, container);
         };
 
         container.MouseRightButtonUp += (_, e) =>
         {
             e.Handled = true;
+            if (model.Kind == DockItemKind.Launchpad)
+            {
+                HideInlineTooltip();
+                OpenNativeWindowsStartMenu();
+                return;
+            }
             ShowContextMenu(container, model);
         };
 
@@ -305,17 +344,13 @@ public partial class DockWindow : Window
         if (model.Kind == DockItemKind.Launchpad) return BuildLaunchpadVectorIcon();
         if (model.Kind == DockItemKind.Explorer) return BuildExplorerVectorIcon();
         if (model.Kind == DockItemKind.RecycleBin) return BuildRecycleBinVectorIcon(model.IsRecycleBinEmpty);
+        if (model.Kind == DockItemKind.MinimizedWindow) return BuildMinimizedWindowVisual(model);
 
         if (!string.IsNullOrWhiteSpace(model.TargetPath))
         {
-            var raw = _iconExtractor.ExtractHighResIcon(model.TargetPath, 128);
-            if (raw is not null)
+            var bmp = GetOrExtractIconBitmap(model.TargetPath, 128);
+            if (bmp is not null)
             {
-                var bmp = BitmapSource.Create(
-                    raw.Width, raw.Height, 96, 96,
-                    PixelFormats.Bgra32, null, raw.BgraPixels, raw.Width * 4);
-                bmp.Freeze();
-
                 var img = new Image
                 {
                     Source = bmp,
@@ -332,6 +367,66 @@ public partial class DockWindow : Window
             Fill = new LinearGradientBrush(Color.FromRgb(0x5A, 0xC8, 0xFA), Color.FromRgb(0x0A, 0x84, 0xFF), 45),
             Margin = new Thickness(5)
         };
+    }
+
+    private static BitmapSource? GetOrExtractIconBitmap(string path, int size)
+        => SharedIconCache.GetOrExtract(path, size);
+
+    private UIElement BuildMinimizedWindowVisual(DockItemModel model)
+    {
+        nint hwnd = model.OpenWindowHandles.Count > 0 ? model.OpenWindowHandles[0] : 0;
+        var root = new Grid { Margin = new Thickness(3) };
+
+        if (hwnd != 0 && _snapshotCache is not null && _snapshotCache.TryGet(hwnd, out var thumb) && thumb is not null)
+        {
+            var img = new Image
+            {
+                Source = thumb,
+                Stretch = Stretch.UniformToFill
+            };
+            RenderOptions.SetBitmapScalingMode(img, BitmapScalingMode.Linear);
+
+            root.Children.Add(new Border
+            {
+                CornerRadius = new CornerRadius(6),
+                BorderBrush = new SolidColorBrush(Color.FromArgb(0x99, 0xFF, 0xFF, 0xFF)),
+                BorderThickness = new Thickness(1),
+                ClipToBounds = true,
+                Child = img
+            });
+        }
+        else
+        {
+            // Fallback glass mini-card with app icon if minimized before GlassShell started
+            root.Children.Add(new Border
+            {
+                CornerRadius = new CornerRadius(6),
+                Background = new SolidColorBrush(_isDarkMode ? Color.FromArgb(0x99, 0x26, 0x2B, 0x38) : Color.FromArgb(0xBB, 0xE8, 0xEE, 0xF7)),
+                BorderBrush = new SolidColorBrush(Color.FromArgb(0x88, 0xFF, 0xFF, 0xFF)),
+                BorderThickness = new Thickness(1)
+            });
+        }
+
+        if (!string.IsNullOrWhiteSpace(model.TargetPath))
+        {
+            var bmp = SharedIconCache.GetOrExtract(model.TargetPath, 48);
+            if (bmp is not null)
+            {
+                var badge = new Image
+                {
+                    Source = bmp,
+                    Width = 18,
+                    Height = 18,
+                    HorizontalAlignment = HorizontalAlignment.Right,
+                    VerticalAlignment = VerticalAlignment.Bottom,
+                    Margin = new Thickness(0, 0, -2, -2)
+                };
+                RenderOptions.SetBitmapScalingMode(badge, BitmapScalingMode.Linear);
+                root.Children.Add(badge);
+            }
+        }
+
+        return root;
     }
 
     private static UIElement BuildExplorerVectorIcon()
@@ -449,19 +544,44 @@ public partial class DockWindow : Window
             LayoutFrame();
         }
 
-        // Auto-hide check (lightweight single Win32 GetCursorPos)
+        // Skip GetCursorPos polling completely when Dock is stationary and visible with no auto-hide condition active!
+        bool autoHideMayEngage = _yieldForTray
+            || _currentSlideY > 0.15
+            || _settings.DockAutoHide == DockAutoHideMode.Always
+            || (_settings.DockAutoHide == DockAutoHideMode.Smart && _hasBottomOverlap);
+
+        if (!autoHideMayEngage)
+        {
+            _bottomEdgeEnterMs = null;
+            return;
+        }
+
+        double nowMs = nowSec * 1000.0;
+        // Throttle idle cursor checks to ~30Hz when Dock is tucked away; full refresh rate while sliding!
+        if (_currentSlideY > 100.0 && (nowMs - _lastCursorPollMs) < 33.0)
+        {
+            return;
+        }
+        _lastCursorPollMs = nowMs;
+
+        // Auto-hide check: reveal on bottom-edge hover, and hide IMMEDIATELY once cursor leaves the Dock capsule!
         bool isAtBottomEdge = false;
         double dwellMs = 0;
         if (GetCursorPos(out POINT cursorPx))
         {
             bool withinMonitorX = cursorPx.X >= _monitor.Bounds.Left && cursorPx.X <= _monitor.Bounds.Right;
-            bool nearBottom = cursorPx.Y >= _monitor.Bounds.Bottom - 4 && cursorPx.Y <= _monitor.Bounds.Bottom;
-            bool insideRevealedDock = _currentSlideY < 10.0 && cursorPx.Y >= _monitor.Bounds.Bottom - (int)(Height * _monitor.DpiScale);
+            bool nearBottom = cursorPx.Y >= _monitor.Bounds.Bottom - 5 && cursorPx.Y <= _monitor.Bounds.Bottom;
+
+            double dockLeftPx = Left * _monitor.DpiScale;
+            double dockRightPx = (Left + Width) * _monitor.DpiScale;
+            double dockTopZonePx = _monitor.Bounds.Bottom - (_settings.DockIconSize + 36) * _monitor.DpiScale;
+            bool insideRevealedDock = _currentSlideY < 10.0
+                && cursorPx.X >= dockLeftPx && cursorPx.X <= dockRightPx
+                && cursorPx.Y >= dockTopZonePx && cursorPx.Y <= _monitor.Bounds.Bottom;
 
             if (withinMonitorX && (nearBottom || insideRevealedDock))
             {
                 isAtBottomEdge = true;
-                double nowMs = _clock.Elapsed.TotalMilliseconds;
                 _bottomEdgeEnterMs ??= insideRevealedDock ? nowMs - DockAutoHideController.DefaultTriggerDelayMs : nowMs;
                 dwellMs = nowMs - _bottomEdgeEnterMs.Value;
             }
@@ -476,7 +596,7 @@ public partial class DockWindow : Window
             _hasBottomOverlap,
             isPointerAtBottomEdge: isAtBottomEdge || _pointerActive,
             bottomEdgeDwellMs: _pointerActive ? DockAutoHideController.DefaultTriggerDelayMs : dwellMs,
-            isMenuOrDragActive: _contextMenu.IsOpen || _draggingItem is not null);
+            isMenuOrDragActive: _contextMenu.IsOpen || _folderStackPopup.IsOpen || _draggingItem is not null);
 
         double targetSlideY = shouldHide ? 104.0 : 0.0;
         if (Math.Abs(targetSlideY - _currentSlideY) > 0.15)
@@ -571,7 +691,7 @@ public partial class DockWindow : Window
             _hoveredItemId = hoveredVisual.Model.Id;
             ShowOrUpdateInlineTooltip(hoveredVisual.Model.Title, hoveredIconCenterX, hoveredIconTopY, canvasW);
         }
-        else if (_hoveredItemId is not null || InlineTooltip.Opacity > 0.01)
+        else if (_hoveredItemId is not null || InlineTooltipAnchor.Opacity > 0.01)
         {
             _hoveredItemId = null;
             HideInlineTooltip();
@@ -584,27 +704,26 @@ public partial class DockWindow : Window
         {
             _lastTooltipText = text;
             InlineTooltipText.Text = text;
-            InlineTooltip.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
-            _cachedTooltipW = InlineTooltip.DesiredSize.Width > 0 ? InlineTooltip.DesiredSize.Width : 64;
-            _cachedTooltipH = InlineTooltip.DesiredSize.Height > 0 ? InlineTooltip.DesiredSize.Height : 28;
         }
 
-        double targetX = Math.Clamp(iconCenterX - _cachedTooltipW * 0.5, 4, Math.Max(4, canvasW - _cachedTooltipW - 4));
-        double targetY = Math.Max(2, iconTopY - _cachedTooltipH - 7.0);
-        InlineTooltipTranslate.X = targetX;
-        InlineTooltipTranslate.Y = targetY;
+        // Fixed 320-DIP centering wrapper -> tooltip center & downward arrow are mathematically guaranteed at iconCenterX!
+        const double wrapperHalfW = 160.0;
+        double targetX = iconCenterX - wrapperHalfW;
+        double targetY = Math.Max(2, iconTopY - 36.0);
+        InlineTooltipTranslate.X = Math.Round(targetX);
+        InlineTooltipTranslate.Y = Math.Round(targetY);
 
-        if (InlineTooltip.Opacity < 0.99)
+        if (InlineTooltipAnchor.Opacity < 0.99)
         {
-            InlineTooltip.Opacity = 1.0;
+            InlineTooltipAnchor.Opacity = 1.0;
         }
     }
 
     private void HideInlineTooltip()
     {
-        if (InlineTooltip.Opacity > 0.01)
+        if (InlineTooltipAnchor.Opacity > 0.01)
         {
-            InlineTooltip.Opacity = 0.0;
+            InlineTooltipAnchor.Opacity = 0.0;
         }
     }
 
@@ -613,7 +732,7 @@ public partial class DockWindow : Window
         CapsuleHost.Height = _settings.DockIconSize + 18;
     }
 
-    private void HandleItemClick(DockItemModel model)
+    private void HandleItemClick(DockItemModel model, UIElement? anchor = null)
     {
         _bounceAnimator.TriggerBounce(model.Id, _clock.Elapsed.TotalSeconds, hops: model.IsRunning ? 1 : 2);
         _layoutDirty = true;
@@ -627,17 +746,37 @@ public partial class DockWindow : Window
                 _recycleBinService.Open();
                 return;
             case DockItemKind.Explorer:
-                if (model.OpenWindowHandles.Count > 0) WindowTracker.ActivateWindow(model.OpenWindowHandles[0]);
+                if (model.OpenWindowHandles.Count > 0) ActivateOrAnimateRestore(model.OpenWindowHandles[0], anchor);
                 else StartProcess("explorer.exe", "shell:MyComputerFolder");
                 return;
             case DockItemKind.Folder:
-                if (!string.IsNullOrWhiteSpace(model.TargetPath)) StartProcess("explorer.exe", model.TargetPath);
+                if (!string.IsNullOrWhiteSpace(model.TargetPath))
+                {
+                    if (anchor is not null)
+                    {
+                        HideInlineTooltip();
+                        _folderStackPopup.ShowForFolder(anchor, model.Title, model.TargetPath);
+                    }
+                    else
+                    {
+                        StartProcess("explorer.exe", model.TargetPath);
+                    }
+                }
+                return;
+            case DockItemKind.MinimizedWindow:
+                if (model.OpenWindowHandles.Count > 0) ActivateOrAnimateRestore(model.OpenWindowHandles[0], anchor);
                 return;
             case DockItemKind.Application:
-                if (model.OpenWindowHandles.Count > 0) WindowTracker.ActivateWindow(model.OpenWindowHandles[0]);
+                if (model.OpenWindowHandles.Count > 0) ActivateOrAnimateRestore(model.OpenWindowHandles[0], anchor);
                 else if (!string.IsNullOrWhiteSpace(model.TargetPath)) StartProcess(model.TargetPath, null);
                 return;
         }
+    }
+
+    private static void ActivateOrAnimateRestore(nint hwnd, UIElement? anchor)
+    {
+        _ = anchor;
+        WindowTracker.ActivateWindow(hwnd);
     }
 
     private void ShowContextMenu(UIElement anchor, DockItemModel model)
@@ -760,10 +899,58 @@ public partial class DockWindow : Window
         catch { }
     }
 
+    private static void OpenNativeWindowsStartMenu()
+    {
+        const uint INPUT_KEYBOARD = 1;
+        const uint KEYEVENTF_KEYUP = 0x0002;
+        const ushort VK_LWIN = 0x5B;
+
+        var inputs = new INPUT[2];
+        inputs[0].type = INPUT_KEYBOARD;
+        inputs[0].u.ki.wVk = VK_LWIN;
+        inputs[1].type = INPUT_KEYBOARD;
+        inputs[1].u.ki.wVk = VK_LWIN;
+        inputs[1].u.ki.dwFlags = KEYEVENTF_KEYUP;
+        SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>());
+    }
+
     [StructLayout(LayoutKind.Sequential)]
     private struct POINT { public int X; public int Y; }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct INPUT
+    {
+        public uint type;
+        public InputUnion u;
+    }
+
+    [StructLayout(LayoutKind.Explicit)]
+    private struct InputUnion
+    {
+        [FieldOffset(0)] public MOUSEINPUT mi;
+        [FieldOffset(0)] public KEYBDINPUT ki;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MOUSEINPUT
+    {
+        public int dx, dy;
+        public uint mouseData, dwFlags, time;
+        public nuint dwExtraInfo;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct KEYBDINPUT
+    {
+        public ushort wVk, wScan;
+        public uint dwFlags, time;
+        public nuint dwExtraInfo;
+    }
 
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool GetCursorPos(out POINT lpPoint);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
 }

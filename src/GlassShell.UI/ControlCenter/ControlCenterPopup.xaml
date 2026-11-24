@@ -1,0 +1,384 @@
+<Popup x:Class="GlassShell.UI.ControlCenter.ControlCenterPopup"
+       xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+       xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+       xmlns:glass="clr-namespace:GlassShell.UI.Glass"
+       AllowsTransparency="True"
+       PopupAnimation="Fade"
+       StaysOpen="False"
+       Placement="Bottom">
+    <Popup.Resources>
+        <!-- Rounded macOS pill button style — eliminates Windows Aero sharp rectangular hover/focus frames! -->
+        <Style x:Key="CcRoundedButtonStyle" TargetType="Button">
+            <Setter Property="Background" Value="Transparent" />
+            <Setter Property="BorderThickness" Value="0" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="10"
+                                Padding="{TemplateBinding Padding}">
+                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                              VerticalAlignment="{TemplateBinding VerticalContentAlignment}" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Background" Value="{DynamicResource CcHoverPillBrush}" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Bd" Property="Opacity" Value="0.78" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <Style x:Key="CcBentoTileButtonStyle" TargetType="Button">
+            <Setter Property="Background" Value="{DynamicResource CcCardBgBrush}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource CcCardBorderBrush}" />
+            <Setter Property="BorderThickness" Value="0.8" />
+            <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+            <Setter Property="VerticalContentAlignment" Value="Center" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd"
+                                Background="{TemplateBinding Background}"
+                                BorderBrush="{TemplateBinding BorderBrush}"
+                                BorderThickness="{TemplateBinding BorderThickness}"
+                                CornerRadius="14"
+                                Padding="10,9">
+                            <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                              VerticalAlignment="{TemplateBinding VerticalContentAlignment}" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Opacity" Value="0.86" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Bd" Property="Opacity" Value="0.74" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Popup.Resources>
+
+    <Grid Width="348"
+          TextOptions.TextFormattingMode="Ideal"
+          TextOptions.TextRenderingMode="Grayscale">
+        <glass:LiquidGlassSurface x:Name="GlassBackdrop"
+                                  CornerRadius="18"
+                                  ShadowPadding="16"
+                                  IsOverlayCard="True"
+                                  IsDarkMode="True" />
+
+        <!-- VIEW 1: Main macOS Bento Control Center -->
+        <StackPanel x:Name="MainBentoView" Margin="26,24,26,24">
+            <!-- Row 1: Connectivity (Left) + Focus/Appearance (Right) -->
+            <Grid Margin="0,0,0,10">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="1.18*" />
+                    <ColumnDefinition Width="10" />
+                    <ColumnDefinition Width="0.82*" />
+                </Grid.ColumnDefinitions>
+
+                <!-- Connectivity Bento Module -->
+                <Border Grid.Column="0"
+                        CornerRadius="14"
+                        Background="{DynamicResource CcCardBgBrush}"
+                        BorderBrush="{DynamicResource CcCardBorderBrush}"
+                        BorderThickness="0.8"
+                        Padding="6,6">
+                    <StackPanel>
+                        <!-- Wi-Fi Row -->
+                        <DockPanel Margin="0,0,0,2">
+                            <Button x:Name="WifiSubPageBtn"
+                                    DockPanel.Dock="Right"
+                                    Style="{StaticResource CcRoundedButtonStyle}"
+                                    Width="26"
+                                    Height="34"
+                                    HorizontalContentAlignment="Center"
+                                    ToolTip="选择 Wi-Fi 网络"
+                                    Click="OnOpenWifiSubPage">
+                                <TextBlock Text="›" FontSize="16" Foreground="{DynamicResource CcSubtleBrush}" Margin="0,-2,0,0" />
+                            </Button>
+                            <Button x:Name="WifiToggleBtn"
+                                    Style="{StaticResource CcRoundedButtonStyle}"
+                                    Padding="5,3"
+                                    Click="OnWifiToggleClick">
+                                <StackPanel Orientation="Horizontal">
+                                    <Border x:Name="WifiCircle" Width="28" Height="28" CornerRadius="14" Background="#0A84FF">
+                                        <TextBlock Text="Wi" FontSize="10" FontWeight="SemiBold" Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                    </Border>
+                                    <StackPanel Margin="8,0,0,0" VerticalAlignment="Center">
+                                        <TextBlock Text="Wi-Fi" FontSize="12" FontWeight="SemiBold" FontFamily="Microsoft YaHei UI, Segoe UI" Foreground="{DynamicResource CcFgBrush}" />
+                                        <TextBlock x:Name="WifiStatusText" Text="检测中…" FontSize="10.5" FontFamily="Microsoft YaHei UI, Segoe UI" Foreground="{DynamicResource CcSubtleBrush}" MaxWidth="82" TextTrimming="CharacterEllipsis" />
+                                    </StackPanel>
+                                </StackPanel>
+                            </Button>
+                        </DockPanel>
+
+                        <!-- Bluetooth Row -->
+                        <DockPanel Margin="0,0,0,2">
+                            <Button x:Name="BtSubPageBtn"
+                                    DockPanel.Dock="Right"
+                                    Style="{StaticResource CcRoundedButtonStyle}"
+                                    Width="26"
+                                    Height="34"
+                                    HorizontalContentAlignment="Center"
+                                    ToolTip="选择蓝牙设备"
+                                    Click="OnOpenBluetoothSubPage">
+                                <TextBlock Text="›" FontSize="16" Foreground="{DynamicResource CcSubtleBrush}" Margin="0,-2,0,0" />
+                            </Button>
+                            <Button x:Name="BtToggleBtn"
+                                    Style="{StaticResource CcRoundedButtonStyle}"
+                                    Padding="5,3"
+                                    Click="OnBluetoothToggleClick">
+                                <StackPanel Orientation="Horizontal">
+                                    <Border x:Name="BtCircle" Width="28" Height="28" CornerRadius="14" Background="#0A84FF">
+                                        <TextBlock Text="BT" FontSize="10" FontWeight="SemiBold" Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                    </Border>
+                                    <StackPanel Margin="8,0,0,0" VerticalAlignment="Center">
+                                        <TextBlock Text="蓝牙" FontSize="12" FontWeight="SemiBold" FontFamily="Microsoft YaHei UI, Segoe UI" Foreground="{DynamicResource CcFgBrush}" />
+                                        <TextBlock x:Name="BtStatusText" Text="检测中…" FontSize="10.5" FontFamily="Microsoft YaHei UI, Segoe UI" Foreground="{DynamicResource CcSubtleBrush}" />
+                                    </StackPanel>
+                                </StackPanel>
+                            </Button>
+                        </DockPanel>
+
+                        <!-- Clipboard History (Win+V) -->
+                        <Button Style="{StaticResource CcRoundedButtonStyle}"
+                                Padding="5,3"
+                                Click="OnClipboardClick">
+                            <StackPanel Orientation="Horizontal">
+                                <Border Width="28" Height="28" CornerRadius="14" Background="#34C759">
+                                    <TextBlock Text="📋" FontSize="12" Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                </Border>
+                                <StackPanel Margin="8,0,0,0" VerticalAlignment="Center">
+                                    <TextBlock Text="剪贴板" FontSize="12" FontWeight="SemiBold" FontFamily="Microsoft YaHei UI, Segoe UI" Foreground="{DynamicResource CcFgBrush}" />
+                                    <TextBlock Text="Win+V 历史" FontSize="10.5" FontFamily="Microsoft YaHei UI, Segoe UI" Foreground="{DynamicResource CcSubtleBrush}" />
+                                </StackPanel>
+                            </StackPanel>
+                        </Button>
+                    </StackPanel>
+                </Border>
+
+                <!-- Right Column: Focus + Appearance -->
+                <Grid Grid.Column="2">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="*" />
+                        <RowDefinition Height="10" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+
+                    <Button Grid.Row="0" Style="{StaticResource CcBentoTileButtonStyle}" Click="OnFocusClick">
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <Border Width="28" Height="28" CornerRadius="14" Background="#5E5CE6">
+                                <TextBlock Text="☾" FontSize="14" Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Border>
+                            <StackPanel Margin="8,0,0,0" VerticalAlignment="Center">
+                                <TextBlock Text="专注" FontSize="12" FontWeight="SemiBold" FontFamily="Microsoft YaHei UI, Segoe UI" Foreground="{DynamicResource CcFgBrush}" />
+                                <TextBlock Text="勿扰设置" FontSize="10.5" FontFamily="Microsoft YaHei UI, Segoe UI" Foreground="{DynamicResource CcSubtleBrush}" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Button>
+
+                    <Button Grid.Row="2" Style="{StaticResource CcBentoTileButtonStyle}" Click="OnThemeCycleClick">
+                        <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                            <Border Width="28" Height="28" CornerRadius="14" Background="#FF9F0A">
+                                <TextBlock Text="◐" FontSize="14" Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Border>
+                            <StackPanel Margin="8,0,0,0" VerticalAlignment="Center">
+                                <TextBlock Text="外观" FontSize="12" FontWeight="SemiBold" FontFamily="Microsoft YaHei UI, Segoe UI" Foreground="{DynamicResource CcFgBrush}" />
+                                <TextBlock x:Name="ThemeModeText" Text="跟随系统" FontSize="10.5" FontFamily="Microsoft YaHei UI, Segoe UI" Foreground="{DynamicResource CcSubtleBrush}" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Button>
+                </Grid>
+            </Grid>
+
+            <!-- Row 2: macOS Mission Control (调度中心 — Win+Tab) -->
+            <Button Style="{StaticResource CcBentoTileButtonStyle}" Margin="0,0,0,10" Click="OnMissionControlClick">
+                <DockPanel>
+                    <TextBlock DockPanel.Dock="Right" Text="Win+Tab" FontSize="10.5" FontFamily="Microsoft YaHei UI, Segoe UI" Foreground="{DynamicResource CcSubtleBrush}" VerticalAlignment="Center" />
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <Border Width="28" Height="28" CornerRadius="14" Background="#32ADE6">
+                            <TextBlock Text="⊞" FontSize="13" Foreground="White" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <StackPanel Margin="10,0,0,0" VerticalAlignment="Center">
+                            <TextBlock Text="调度中心" FontSize="12" FontWeight="SemiBold" FontFamily="Microsoft YaHei UI, Segoe UI" Foreground="{DynamicResource CcFgBrush}" />
+                            <TextBlock Text="多窗口与虚拟桌面总览" FontSize="10.5" FontFamily="Microsoft YaHei UI, Segoe UI" Foreground="{DynamicResource CcSubtleBrush}" />
+                        </StackPanel>
+                    </StackPanel>
+                </DockPanel>
+            </Button>
+
+            <!-- Brightness Slider Card (auto-hidden when hardware unsupported) -->
+            <Border x:Name="BrightnessCard"
+                    CornerRadius="14"
+                    Background="{DynamicResource CcCardBgBrush}"
+                    BorderBrush="{DynamicResource CcCardBorderBrush}"
+                    BorderThickness="0.8"
+                    Padding="12,9"
+                    Margin="0,0,0,10">
+                <StackPanel>
+                    <DockPanel Margin="0,0,0,5">
+                        <TextBlock Text="显示器亮度" FontSize="11.5" FontWeight="SemiBold" FontFamily="Microsoft YaHei UI, Segoe UI" Foreground="{DynamicResource CcFgBrush}" />
+                        <TextBlock x:Name="BrightnessValueText" DockPanel.Dock="Right" HorizontalAlignment="Right" Text="80%" FontSize="11" Foreground="{DynamicResource CcSubtleBrush}" Typography.NumeralAlignment="Tabular" />
+                    </DockPanel>
+                    <Slider x:Name="BrightnessSlider" Minimum="0" Maximum="100" Value="80" IsMoveToPointEnabled="True" ValueChanged="OnBrightnessChanged" />
+                </StackPanel>
+            </Border>
+
+            <!-- Volume Slider Card -->
+            <Border CornerRadius="14"
+                    Background="{DynamicResource CcCardBgBrush}"
+                    BorderBrush="{DynamicResource CcCardBorderBrush}"
+                    BorderThickness="0.8"
+                    Padding="12,9"
+                    Margin="0,0,0,10">
+                <StackPanel>
+                    <DockPanel Margin="0,0,0,5">
+                        <Button x:Name="MuteToggleButton"
+                                DockPanel.Dock="Left"
+                                Style="{StaticResource CcRoundedButtonStyle}"
+                                Width="24"
+                                Height="20"
+                                HorizontalContentAlignment="Center"
+                                Margin="0,0,4,0"
+                                Click="OnMuteToggleClick">
+                            <TextBlock x:Name="MuteGlyph" Text="🔊" FontSize="12" Foreground="{DynamicResource CcFgBrush}" />
+                        </Button>
+                        <TextBlock Text="声音" FontSize="11.5" FontWeight="SemiBold" FontFamily="Microsoft YaHei UI, Segoe UI" Foreground="{DynamicResource CcFgBrush}" VerticalAlignment="Center" />
+                        <TextBlock x:Name="VolumeValueText" DockPanel.Dock="Right" HorizontalAlignment="Right" Text="10%" FontSize="11" Foreground="{DynamicResource CcSubtleBrush}" VerticalAlignment="Center" Typography.NumeralAlignment="Tabular" />
+                    </DockPanel>
+                    <Slider x:Name="VolumeSlider" Minimum="0" Maximum="100" Value="10" IsMoveToPointEnabled="True" ValueChanged="OnVolumeChanged" />
+                </StackPanel>
+            </Border>
+
+            <!-- Now Playing (WinRT SMTC) Media Card -->
+            <Border CornerRadius="14"
+                    Background="{DynamicResource CcCardBgBrush}"
+                    BorderBrush="{DynamicResource CcCardBorderBrush}"
+                    BorderThickness="0.8"
+                    Padding="12,10">
+                <DockPanel>
+                    <Border Width="42" Height="42" CornerRadius="9" Background="{DynamicResource CcBtnBgBrush}" ClipToBounds="True" DockPanel.Dock="Left">
+                        <Grid>
+                            <TextBlock x:Name="MediaFallbackGlyph" Text="♫" FontSize="18" Foreground="{DynamicResource CcSubtleBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            <Image x:Name="MediaArtworkImage" Stretch="UniformToFill" />
+                        </Grid>
+                    </Border>
+
+                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal" VerticalAlignment="Center" Margin="6,0,0,0">
+                        <Button Style="{StaticResource CcRoundedButtonStyle}" Width="28" Height="28" HorizontalContentAlignment="Center" Click="OnPrevTrackClick">
+                            <TextBlock Text="⏮" FontSize="12" Foreground="{DynamicResource CcFgBrush}" />
+                        </Button>
+                        <Button x:Name="PlayPauseBtn" Style="{StaticResource CcRoundedButtonStyle}" Background="{DynamicResource CcBtnBgBrush}" Width="30" Height="28" HorizontalContentAlignment="Center" Margin="2,0" Click="OnPlayPauseClick">
+                            <TextBlock x:Name="PlayPauseGlyph" Text="▶" FontSize="13" Foreground="{DynamicResource CcFgBrush}" />
+                        </Button>
+                        <Button Style="{StaticResource CcRoundedButtonStyle}" Width="28" Height="28" HorizontalContentAlignment="Center" Click="OnNextTrackClick">
+                            <TextBlock Text="⏭" FontSize="12" Foreground="{DynamicResource CcFgBrush}" />
+                        </Button>
+                    </StackPanel>
+
+                    <StackPanel Margin="10,0,0,0" VerticalAlignment="Center">
+                        <TextBlock x:Name="MediaTitleText" Text="未在播放" FontSize="12.5" FontWeight="SemiBold" FontFamily="Microsoft YaHei UI, Segoe UI" Foreground="{DynamicResource CcFgBrush}" TextTrimming="CharacterEllipsis" />
+                        <TextBlock x:Name="MediaArtistText" Text="打开音乐或视频即可在此控制" FontSize="10.5" FontFamily="Microsoft YaHei UI, Segoe UI" Foreground="{DynamicResource CcSubtleBrush}" TextTrimming="CharacterEllipsis" />
+                    </StackPanel>
+                </DockPanel>
+            </Border>
+        </StackPanel>
+
+        <!-- VIEW 2: Dedicated Wi-Fi Sub-Page (macOS Control Center drill-down) -->
+        <StackPanel x:Name="WifiSubPage" Visibility="Collapsed" Margin="26,22,26,22">
+            <DockPanel Margin="0,0,0,12">
+                <Button DockPanel.Dock="Left"
+                        Style="{StaticResource CcRoundedButtonStyle}"
+                        Padding="6,4"
+                        Click="OnBackToMainClick">
+                    <TextBlock Text="‹ 返回" FontSize="12.5" FontFamily="Microsoft YaHei UI, Segoe UI" Foreground="{DynamicResource CcSubtleBrush}" />
+                </Button>
+                <Button x:Name="WifiSubToggleBtn"
+                        DockPanel.Dock="Right"
+                        Style="{StaticResource CcRoundedButtonStyle}"
+                        Background="{DynamicResource CcBtnBgBrush}"
+                        Padding="10,4"
+                        Click="OnWifiToggleClick">
+                    <TextBlock x:Name="WifiSubToggleText" Text="已开启" FontSize="11.5" FontWeight="SemiBold" FontFamily="Microsoft YaHei UI, Segoe UI" Foreground="{DynamicResource CcFgBrush}" />
+                </Button>
+                <TextBlock Text="Wi-Fi" FontSize="14" FontWeight="SemiBold" FontFamily="Microsoft YaHei UI, Segoe UI" Foreground="{DynamicResource CcFgBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
+            </DockPanel>
+
+            <Border CornerRadius="14"
+                    Background="{DynamicResource CcCardBgBrush}"
+                    BorderBrush="{DynamicResource CcCardBorderBrush}"
+                    BorderThickness="0.8"
+                    Padding="8,6">
+                <ScrollViewer MaxHeight="260" VerticalScrollBarVisibility="Auto">
+                    <StackPanel x:Name="WifiNetworksList" />
+                </ScrollViewer>
+            </Border>
+
+            <Button Style="{StaticResource CcRoundedButtonStyle}"
+                    Background="{DynamicResource CcBtnBgBrush}"
+                    Height="32"
+                    Margin="0,10,0,0"
+                    HorizontalContentAlignment="Center"
+                    Click="OnOpenAvailableNetworksFlyout">
+                <TextBlock Text="连接其他网络 / 系统网络面板…" FontSize="12" FontFamily="Microsoft YaHei UI, Segoe UI" Foreground="{DynamicResource CcFgBrush}" />
+            </Button>
+        </StackPanel>
+
+        <!-- VIEW 3: Dedicated Bluetooth Sub-Page (macOS Control Center drill-down) -->
+        <StackPanel x:Name="BluetoothSubPage" Visibility="Collapsed" Margin="26,22,26,22">
+            <DockPanel Margin="0,0,0,12">
+                <Button DockPanel.Dock="Left"
+                        Style="{StaticResource CcRoundedButtonStyle}"
+                        Padding="6,4"
+                        Click="OnBackToMainClick">
+                    <TextBlock Text="‹ 返回" FontSize="12.5" FontFamily="Microsoft YaHei UI, Segoe UI" Foreground="{DynamicResource CcSubtleBrush}" />
+                </Button>
+                <Button x:Name="BtSubToggleBtn"
+                        DockPanel.Dock="Right"
+                        Style="{StaticResource CcRoundedButtonStyle}"
+                        Background="{DynamicResource CcBtnBgBrush}"
+                        Padding="10,4"
+                        Click="OnBluetoothToggleClick">
+                    <TextBlock x:Name="BtSubToggleText" Text="已开启" FontSize="11.5" FontWeight="SemiBold" FontFamily="Microsoft YaHei UI, Segoe UI" Foreground="{DynamicResource CcFgBrush}" />
+                </Button>
+                <TextBlock Text="蓝牙" FontSize="14" FontWeight="SemiBold" FontFamily="Microsoft YaHei UI, Segoe UI" Foreground="{DynamicResource CcFgBrush}" HorizontalAlignment="Center" VerticalAlignment="Center" />
+            </DockPanel>
+
+            <Border CornerRadius="14"
+                    Background="{DynamicResource CcCardBgBrush}"
+                    BorderBrush="{DynamicResource CcCardBorderBrush}"
+                    BorderThickness="0.8"
+                    Padding="8,6">
+                <ScrollViewer MaxHeight="260" VerticalScrollBarVisibility="Auto">
+                    <StackPanel x:Name="BluetoothDevicesList" />
+                </ScrollViewer>
+            </Border>
+
+            <Button Style="{StaticResource CcRoundedButtonStyle}"
+                    Background="{DynamicResource CcBtnBgBrush}"
+                    Height="32"
+                    Margin="0,10,0,0"
+                    HorizontalContentAlignment="Center"
+                    Click="OnOpenBluetoothSettings">
+                <TextBlock Text="蓝牙设置与配对新设备…" FontSize="12" FontFamily="Microsoft YaHei UI, Segoe UI" Foreground="{DynamicResource CcFgBrush}" />
+            </Button>
+        </StackPanel>
+    </Grid>
+</Popup>

@@ -1,26 +1,43 @@
 using System;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
-using CommunityToolkit.Mvvm.ComponentModel;
+using System.ComponentModel;
+using System.Runtime.CompilerServices;
 using GlassShell.Core.Config;
 using GlassShell.Core.MenuEngine;
 using GlassShell.Core.SystemStatus;
 
 namespace GlassShell.UI.MenuBar;
 
-public sealed partial class MenuBarViewModel : ObservableObject
+public sealed class MenuBarViewModel : INotifyPropertyChanged
 {
-    [ObservableProperty] private string _activeAppName = "桌面";
-    [ObservableProperty] private nint _activeTargetHwnd;
-    [ObservableProperty] private string _inputMethodLabel = "拼";
-    [ObservableProperty] private bool _hasBattery;
-    [ObservableProperty] private int _batteryPercent = 100;
-    [ObservableProperty] private bool _isCharging;
-    [ObservableProperty] private bool _isNetworkConnected = true;
-    [ObservableProperty] private string _formattedClock = ClockFormatter.FormatMacZhCn(DateTime.Now);
-    [ObservableProperty] private bool _showMenuBarBackground;
-    [ObservableProperty] private bool _isDarkMode = true;
-    [ObservableProperty] private GlassOpacityPreset _opacityPreset = GlassOpacityPreset.Clear;
-    [ObservableProperty] private bool _isTrayPeekActive;
+    private string _activeAppName = "桌面";
+    private nint _activeTargetHwnd;
+    private string _inputMethodLabel = "中";
+    private bool _hasBattery;
+    private int _batteryPercent = 100;
+    private bool _isCharging;
+    private bool _isNetworkConnected = true;
+    private string _formattedClock = ClockFormatter.FormatMacZhCn(DateTime.Now);
+    private bool _showMenuBarBackground;
+    private bool _isDarkMode = true;
+    private GlassOpacityPreset _opacityPreset = GlassOpacityPreset.Clear;
+    private bool _isTrayPeekActive;
+
+    public event PropertyChangedEventHandler? PropertyChanged;
+
+    public string ActiveAppName { get => _activeAppName; set => SetField(ref _activeAppName, value); }
+    public nint ActiveTargetHwnd { get => _activeTargetHwnd; set => SetField(ref _activeTargetHwnd, value); }
+    public string InputMethodLabel { get => _inputMethodLabel; set => SetField(ref _inputMethodLabel, value); }
+    public bool HasBattery { get => _hasBattery; set => SetField(ref _hasBattery, value); }
+    public int BatteryPercent { get => _batteryPercent; set => SetField(ref _batteryPercent, value); }
+    public bool IsCharging { get => _isCharging; set => SetField(ref _isCharging, value); }
+    public bool IsNetworkConnected { get => _isNetworkConnected; set => SetField(ref _isNetworkConnected, value); }
+    public string FormattedClock { get => _formattedClock; set => SetField(ref _formattedClock, value); }
+    public bool ShowMenuBarBackground { get => _showMenuBarBackground; set => SetField(ref _showMenuBarBackground, value); }
+    public bool IsDarkMode { get => _isDarkMode; set => SetField(ref _isDarkMode, value); }
+    public GlassOpacityPreset OpacityPreset { get => _opacityPreset; set => SetField(ref _opacityPreset, value); }
+    public bool IsTrayPeekActive { get => _isTrayPeekActive; set => SetField(ref _isTrayPeekActive, value); }
 
     public ObservableCollection<MenuNode> TopLevelMenus { get; } = [];
 
@@ -50,5 +67,12 @@ public sealed partial class MenuBarViewModel : ObservableObject
         ShowMenuBarBackground = settings.ShowMenuBarBackground;
         OpacityPreset = settings.OpacityPreset;
         IsDarkMode = resolvedDarkMode;
+    }
+
+    private void SetField<T>(ref T field, T value, [CallerMemberName] string? name = null)
+    {
+        if (EqualityComparer<T>.Default.Equals(field, value)) return;
+        field = value;
+        PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
     }
 }

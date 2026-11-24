@@ -36,6 +36,7 @@ public sealed class TrayProxyHost : IDisposable
 
     private readonly TrayIconRegistry _registry = new();
     private readonly Dictionary<TrayIconKey, (long Revision, BitmapSource? Bitmap)> _bitmapCache = new();
+    private readonly Dictionary<TrayIconKey, long> _lastIconModifyTicks = new();
     private readonly WndProcDelegate _wndProcDelegate;
     private readonly DispatcherTimer _pruneTimer;
     private readonly uint _taskbarCreatedMsg;
@@ -59,6 +60,7 @@ public sealed class TrayProxyHost : IDisposable
     }
 
     public event Action<IReadOnlyList<TrayDisplayItem>>? IconsChanged;
+    public event Action<uint>? TrayIconFlashingDetected;
 
     /// <summary>
     /// True briefly while GlassShell itself broadcasts TaskbarCreated so MenuBarWindow doesn't mistake it for an Explorer crash.
@@ -205,6 +207,18 @@ public sealed class TrayProxyHost : IDisposable
                         {
                             var bmp = TrayIconBitmapConverter.ConvertFromHIcon(updated.IconHandle, updated.Key.OwnerHwnd);
                             _bitmapCache[updated.Key] = (updated.IconRevision, bmp);
+
+                            // Detect rapid tray icon blink (e.g. WeChat/QQ swapping icon every ~400ms on new message!)
+                            if (cmd.Kind == TrayCommandKind.Modify && (cmd.Flags & NotifyIconFlags.Icon) != 0 && cmd.OwnerHwnd != 0)
+                            {
+                                long nowTicks = Environment.TickCount64;
+                                if (_lastIconModifyTicks.TryGetValue(updated.Key, out long prevTicks) && (nowTicks - prevTicks) <= 1500)
+                                {
+                                    GetWindowThreadProcessId(cmd.OwnerHwnd, out uint ownerPid);
+                                    if (ownerPid != 0) TrayIconFlashingDetected?.Invoke(ownerPid);
+                                }
+                                _lastIconModifyTicks[updated.Key] = nowTicks;
+                            }
                         }
                     }
 

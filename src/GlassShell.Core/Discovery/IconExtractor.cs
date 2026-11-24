@@ -15,6 +15,15 @@ public sealed class IconExtractor
         return _cache.GetOrAdd(key, _ => ExtractInternal(path, targetPx));
     }
 
+    /// <summary>
+    /// Stateless extraction without retaining raw BGRA byte buffers in memory;
+    /// preferred when the caller immediately converts to a shared frozen BitmapSource cache.
+    /// </summary>
+    public static RawIconBitmap? ExtractRaw(string path, int targetPx = 96)
+    {
+        return string.IsNullOrWhiteSpace(path) ? null : ExtractInternal(path, targetPx);
+    }
+
     private static RawIconBitmap? ExtractInternal(string path, int targetPx)
     {
         try
@@ -26,10 +35,17 @@ public sealed class IconExtractor
             try
             {
                 var size = new SIZE { cx = targetPx, cy = targetPx };
-                hr = factory.GetImage(size, SIIGBF_BIGGERSIZEOK | SIIGBF_ICONONLY, out nint hBitmap);
+                bool isShellApp = path.StartsWith("shell:", StringComparison.OrdinalIgnoreCase);
+                hr = isShellApp
+                    ? factory.GetImage(size, SIIGBF_BIGGERSIZEOK, out nint hBitmap)
+                    : factory.GetImage(size, SIIGBF_BIGGERSIZEOK | SIIGBF_ICONONLY, out hBitmap);
                 if (hr != 0 || hBitmap == 0)
                 {
                     hr = factory.GetImage(size, SIIGBF_BIGGERSIZEOK, out hBitmap);
+                }
+                if (hr != 0 || hBitmap == 0)
+                {
+                    hr = factory.GetImage(size, 0, out hBitmap);
                 }
 
                 if (hr != 0 || hBitmap == 0) return null;

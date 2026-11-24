@@ -16,6 +16,7 @@ using GlassShell.Core.MenuEngine;
 using GlassShell.Core.Shell;
 using GlassShell.Core.SystemStatus;
 using GlassShell.Core.Tray;
+using GlassShell.UI.ControlCenter;
 using GlassShell.UI.Glass;
 using GlassShell.UI.Tray;
 
@@ -30,16 +31,23 @@ public partial class MenuBarWindow : Window
     private readonly IWindowTracker _windowTracker;
     private readonly DxgiBackdropSampler _sampler;
     private readonly TrayProxyHost _trayProxyHost;
+    private readonly GlobalHotkeyManager? _hotkeyManager;
     private readonly LiquidGlassMenuPopup _menuPopup = new();
     private readonly CalendarPopup _calendarPopup = new();
     private readonly TrayOverflowPopup _trayOverflowPopup = new();
+    private readonly ControlCenterPopup _controlCenterPopup = new();
+    private readonly BatteryPopup _batteryPopup = new();
     private readonly DispatcherTimer _statusTimer;
+    private readonly DispatcherTimer _imeTimer;
 
     private MonitorContext _monitor;
     private GlassSettings _settings;
     private IReadOnlyList<TrayDisplayItem> _lastTrayItems = [];
     private Button? _activeMenuButton;
     private uint _taskbarCreatedMsg;
+    private uint _shellHookMsg;
+
+    public event Action<nint>? WindowFlashDetected;
 
     public MenuBarWindow(
         MonitorContext monitor,
@@ -48,7 +56,8 @@ public partial class MenuBarWindow : Window
         DxgiBackdropSampler sampler,
         TrayProxyHost trayProxyHost,
         GlassSettings settings,
-        bool isDarkMode)
+        bool isDarkMode,
+        GlobalHotkeyManager? hotkeyManager = null)
     {
         InitializeComponent();
         _monitor = monitor;
@@ -56,15 +65,19 @@ public partial class MenuBarWindow : Window
         _windowTracker = windowTracker;
         _sampler = sampler;
         _trayProxyHost = trayProxyHost;
+        _hotkeyManager = hotkeyManager;
         _settings = settings;
         DataContext = _vm;
 
-        BarGlassBackdrop.AttachSampler(sampler);
         _menuPopup.Closed += (_, _) => ClearActiveMenuButton();
         _trayOverflowPopup.Closed += (_, _) => TrayOverflowButton.Tag = null;
         _trayOverflowPopup.TrayIconInvoked += HandleTrayIconInvoked;
         _trayOverflowPopup.TrayIconPinToggled += HandleTrayIconPinToggled;
+        _trayOverflowPopup.TrayOverflowReordered += HandleTrayOverflowReordered;
         _trayOverflowPopup.NativeTaskbarPeekRequested += ToggleNativeTaskbarPeek;
+        _controlCenterPopup.Closed += (_, _) => ControlCenterButton.Tag = null;
+        _batteryPopup.Closed += (_, _) => BatteryButton.Tag = null;
+        _controlCenterPopup.ThemeChangeRequested += theme => SettingsUpdated?.Invoke(_settings with { Theme = theme });
         ApplySettings(settings, isDarkMode);
         PositionToMonitor(monitor);
 
@@ -74,6 +87,11 @@ public partial class MenuBarWindow : Window
         _statusTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _statusTimer.Tick += (_, _) => RefreshSystemStatus();
         _statusTimer.Start();
+
+        _imeTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
+        _imeTimer.Tick += (_, _) => _vm.InputMethodLabel = _statusProvider.CaptureImeBadgeOnly(_vm.ActiveTargetHwnd);
+        _imeTimer.Start();
+
         RefreshSystemStatus();
     }
 
@@ -91,10 +109,21 @@ public partial class MenuBarWindow : Window
         _vm.ApplySettings(settings, isDarkMode);
         BarGlassBackdrop.OpacityPreset = settings.OpacityPreset;
         BarGlassBackdrop.IsDarkMode = isDarkMode;
-        BarGlassBackdrop.Visibility = settings.ShowMenuBarBackground ? Visibility.Visible : Visibility.Collapsed;
+        if (settings.ShowMenuBarBackground)
+        {
+            BarGlassBackdrop.AttachSampler(_sampler);
+            BarGlassBackdrop.Visibility = Visibility.Visible;
+        }
+        else
+        {
+            BarGlassBackdrop.Visibility = Visibility.Collapsed;
+        }
         _menuPopup.ConfigureVisuals(_sampler, settings.OpacityPreset, isDarkMode);
         _calendarPopup.ConfigureVisuals(_sampler, settings.OpacityPreset, isDarkMode);
         _trayOverflowPopup.ConfigureVisuals(_sampler, settings.OpacityPreset, isDarkMode);
+        _controlCenterPopup.ConfigureVisuals(_sampler, settings, isDarkMode);
+        _batteryPopup.ConfigureVisuals(_sampler, settings.OpacityPreset, isDarkMode);
+        WifiBarButton.Visibility = settings.ShowMenuBarWifiIcon ? Visibility.Visible : Visibility.Collapsed;
         UpdateTopBarInk(settings.ShowMenuBarBackground, isDarkMode);
         RebuildTrayVisuals();
     }
@@ -112,6 +141,8 @@ public partial class MenuBarWindow : Window
             _menuPopup.IsOpen = false;
             _calendarPopup.IsOpen = false;
             _trayOverflowPopup.IsOpen = false;
+            _controlCenterPopup.IsOpen = false;
+            _batteryPopup.IsOpen = false;
         });
     }
 
@@ -121,25 +152,31 @@ public partial class MenuBarWindow : Window
             ? !isDarkMode
             : WallpaperLuminanceSampler.ShouldUseDarkInkForTopBar();
 
-        Resources["MenuBarForegroundBrush"] = new System.Windows.Media.SolidColorBrush(
+        var fgBrush = new System.Windows.Media.SolidColorBrush(
             useDarkInk
                 ? System.Windows.Media.Color.FromArgb(0xF0, 0x10, 0x11, 0x16)
                 : System.Windows.Media.Color.FromArgb(0xF8, 0xFF, 0xFF, 0xFF));
-
-        Resources["MenuBarHoverBrush"] = new System.Windows.Media.SolidColorBrush(
+        var hoverBrush = new System.Windows.Media.SolidColorBrush(
             useDarkInk
                 ? System.Windows.Media.Color.FromArgb(0x1E, 0x00, 0x00, 0x00)
                 : System.Windows.Media.Color.FromArgb(0x33, 0xFF, 0xFF, 0xFF));
-
-        Resources["MenuBarActiveBrush"] = new System.Windows.Media.SolidColorBrush(
+        var activeBrush = new System.Windows.Media.SolidColorBrush(
             useDarkInk
                 ? System.Windows.Media.Color.FromArgb(0x32, 0x00, 0x00, 0x00)
                 : System.Windows.Media.Color.FromArgb(0x4D, 0xFF, 0xFF, 0xFF));
-
-        Resources["MenuBarInverseDotBrush"] = new System.Windows.Media.SolidColorBrush(
+        var invBrush = new System.Windows.Media.SolidColorBrush(
             useDarkInk
                 ? System.Windows.Media.Color.FromRgb(0xF5, 0xF5, 0xF7)
                 : System.Windows.Media.Color.FromRgb(0x1C, 0x1C, 0x1E));
+        fgBrush.Freeze();
+        hoverBrush.Freeze();
+        activeBrush.Freeze();
+        invBrush.Freeze();
+
+        Resources["MenuBarForegroundBrush"] = fgBrush;
+        Resources["MenuBarHoverBrush"] = hoverBrush;
+        Resources["MenuBarActiveBrush"] = activeBrush;
+        Resources["MenuBarInverseDotBrush"] = invBrush;
     }
 
     private void OnUserPreferenceChanged(object? sender, Microsoft.Win32.UserPreferenceChangedEventArgs e)
@@ -177,13 +214,35 @@ public partial class MenuBarWindow : Window
         _menuPopup.OwnerAnchorHwnd = hwnd;
         _calendarPopup.OwnerAnchorHwnd = hwnd;
         _trayOverflowPopup.OwnerAnchorHwnd = hwnd;
+        _controlCenterPopup.OwnerAnchorHwnd = hwnd;
+        _batteryPopup.OwnerAnchorHwnd = hwnd;
 
         _taskbarCreatedMsg = RegisterWindowMessageW("TaskbarCreated");
+        if (_monitor.IsPrimary)
+        {
+            _shellHookMsg = RegisterWindowMessageW("SHELLHOOK");
+            RegisterShellHookWindow(hwnd);
+        }
         HwndSource.FromHwnd(hwnd)?.AddHook(WndProc);
     }
 
     private nint WndProc(nint hwnd, int msg, nint wParam, nint lParam, ref bool handled)
     {
+        if (_hotkeyManager is not null && _hotkeyManager.ProcessWndProc(msg, wParam))
+        {
+            handled = true;
+            return 0;
+        }
+
+        if (_shellHookMsg != 0 && (uint)msg == _shellHookMsg && lParam != 0)
+        {
+            int code = unchecked((int)wParam);
+            if (code == 0x8006 /* HSHELL_FLASH */)
+            {
+                WindowFlashDetected?.Invoke(lParam);
+            }
+        }
+
         if (_taskbarCreatedMsg != 0 && (uint)msg == _taskbarCreatedMsg && !_trayProxyHost.IsSelfBroadcastActive)
         {
             _taskbarController.HandleExplorerRestart();
@@ -210,6 +269,12 @@ public partial class MenuBarWindow : Window
 
     private void OnWinLogoClick(object sender, RoutedEventArgs e) => ToggleMenu(WinLogoButton, BuildWinSystemMenu());
 
+    private void OnWinLogoRightClick(object sender, MouseButtonEventArgs e)
+    {
+        e.Handled = true;
+        OpenMenu(WinLogoButton, BuildWinPowerUserMenu());
+    }
+
     private void OnBarBackgroundClick(object sender, MouseButtonEventArgs e)
     {
         if (e.OriginalSource == RootGrid)
@@ -217,6 +282,7 @@ public partial class MenuBarWindow : Window
             _menuPopup.IsOpen = false;
             _calendarPopup.IsOpen = false;
             _trayOverflowPopup.IsOpen = false;
+            _controlCenterPopup.IsOpen = false;
         }
     }
 
@@ -270,6 +336,7 @@ public partial class MenuBarWindow : Window
     {
         _calendarPopup.IsOpen = false;
         _trayOverflowPopup.IsOpen = false;
+        _controlCenterPopup.IsOpen = false;
         ClearActiveMenuButton();
         _activeMenuButton = button;
         button.Tag = "Active";
@@ -313,7 +380,34 @@ public partial class MenuBarWindow : Window
         new("锁定屏幕", "Win+L", OnClick: () => LockWorkStation()),
         new("注销当前用户…", OnClick: () => ExitWindowsEx(0, 0)),
         new(string.Empty, IsSeparator: true),
-        new("恢复原生任务栏并退出 GlassShell", OnClick: () => RestoreNativeTaskbarRequested?.Invoke())
+        new("退出 GlassShell", OnClick: () => RestoreNativeTaskbarRequested?.Invoke())
+    ];
+
+    private IReadOnlyList<PopupMenuEntry> BuildWinPowerUserMenu() =>
+    [
+        new("已安装的应用", OnClick: () => LaunchUri("ms-settings:appsfeatures")),
+        new("电源选项", OnClick: () => LaunchUri("ms-settings:powersleep")),
+        new("事件查看器", OnClick: () => LaunchProcess("eventvwr.msc")),
+        new("系统", OnClick: () => LaunchUri("ms-settings:about")),
+        new("设备管理器", OnClick: () => LaunchProcess("devmgmt.msc")),
+        new("网络连接", OnClick: () => LaunchProcess("ncpa.cpl")),
+        new("磁盘管理", OnClick: () => LaunchProcess("diskmgmt.msc")),
+        new("计算机管理", OnClick: () => LaunchProcess("compmgmt.msc")),
+        new("终端", OnClick: () => LaunchTerminal(asAdmin: false)),
+        new("终端 (管理员)", OnClick: () => LaunchTerminal(asAdmin: true)),
+        new(string.Empty, IsSeparator: true),
+        new("任务管理器", "Ctrl+Shift+Esc", OnClick: () => LaunchProcess("taskmgr.exe")),
+        new("设置", "Win+I", OnClick: () => LaunchUri("ms-settings:")),
+        new("文件资源管理器", "Win+E", OnClick: () => LaunchProcess("explorer.exe")),
+        new("搜索", "Win+S", OnClick: () => SendWinChord(0x53 /* S */)),
+        new("运行", "Win+R", OnClick: () => LaunchProcess("explorer.exe", "shell:::{2559a1f3-21d7-11d4-bdaf-00c04f60b9f0}")),
+        new(string.Empty, IsSeparator: true),
+        new("睡眠", OnClick: () => SetSuspendState(false, false, false)),
+        new("重新启动", OnClick: () => Process.Start(new ProcessStartInfo("shutdown", "/r /t 0") { CreateNoWindow = true, UseShellExecute = false })),
+        new("关机", OnClick: () => Process.Start(new ProcessStartInfo("shutdown", "/s /t 0") { CreateNoWindow = true, UseShellExecute = false })),
+        new("注销", OnClick: () => ExitWindowsEx(0, 0)),
+        new(string.Empty, IsSeparator: true),
+        new("桌面", "Win+D", OnClick: () => SendWinChord(0x44 /* D */))
     ];
 
     private IReadOnlyList<PopupMenuEntry> BuildActiveAppMenu() =>
@@ -334,7 +428,8 @@ public partial class MenuBarWindow : Window
         var (barRecs, overflowRecs) = TrayIconRegistry.PartitionForMenuBar(
             records,
             _settings.PinnedTrayIconKeys,
-            defaultInlineCount: 4);
+            defaultInlineCount: 4,
+            overflowOrderKeys: _settings.OverflowTrayOrderKeys);
 
         var inlineTiles = new List<(TrayDisplayItem Item, Border Tile)>(barRecs.Count);
         foreach (var rec in barRecs)
@@ -509,10 +604,32 @@ public partial class MenuBarWindow : Window
         SettingsUpdated?.Invoke(_settings with { PinnedTrayIconKeys = pinned });
     }
 
+    private void HandleTrayOverflowReordered(string sourceKey, string targetKey)
+    {
+        var records = _lastTrayItems.Select(i => i.Record).ToList();
+        var (_, currentOverflow) = TrayIconRegistry.PartitionForMenuBar(
+            records,
+            _settings.PinnedTrayIconKeys,
+            defaultInlineCount: 4,
+            overflowOrderKeys: _settings.OverflowTrayOrderKeys);
+
+        var order = currentOverflow.Select(r => r.PreferenceKey).ToList();
+        int srcIdx = order.FindIndex(k => string.Equals(k, sourceKey, StringComparison.OrdinalIgnoreCase));
+        int dstIdx = order.FindIndex(k => string.Equals(k, targetKey, StringComparison.OrdinalIgnoreCase));
+        if (srcIdx < 0 || dstIdx < 0 || srcIdx == dstIdx) return;
+
+        string moved = order[srcIdx];
+        order.RemoveAt(srcIdx);
+        order.Insert(dstIdx, moved);
+
+        SettingsUpdated?.Invoke(_settings with { OverflowTrayOrderKeys = order });
+    }
+
     private void OnTrayOverflowClick(object sender, RoutedEventArgs e)
     {
         _menuPopup.IsOpen = false;
         _calendarPopup.IsOpen = false;
+        _controlCenterPopup.IsOpen = false;
 
         if (_trayOverflowPopup.IsOpen)
         {
@@ -543,16 +660,92 @@ public partial class MenuBarWindow : Window
 
     private void OnImeClick(object sender, RoutedEventArgs e)
     {
-        _dispatcher.Dispatch(_vm.ActiveTargetHwnd, new MenuInvokeAction(MenuActionKind.KeyboardShortcut, Shortcut: "Win+Space"));
+        SystemStatusProvider.ToggleChineseEnglishOrLayout(_vm.ActiveTargetHwnd);
+        _vm.InputMethodLabel = _statusProvider.CaptureImeBadgeOnly(_vm.ActiveTargetHwnd);
     }
 
-    private void OnSpotlightClick(object sender, RoutedEventArgs e) => SpotlightRequested?.Invoke();
-    private void OnControlCenterClick(object sender, RoutedEventArgs e) => ControlCenterRequested?.Invoke();
+    private void OnImeRightClick(object sender, MouseButtonEventArgs e)
+    {
+        e.Handled = true;
+        SystemStatusProvider.SwitchKeyboardLayout(_vm.ActiveTargetHwnd);
+        _vm.InputMethodLabel = _statusProvider.CaptureImeBadgeOnly(_vm.ActiveTargetHwnd);
+    }
+
+    private void OnSpotlightClick(object sender, RoutedEventArgs e)
+    {
+        _menuPopup.IsOpen = false;
+        _calendarPopup.IsOpen = false;
+        _trayOverflowPopup.IsOpen = false;
+        _controlCenterPopup.IsOpen = false;
+        SpotlightRequested?.Invoke();
+    }
+
+    private void OnBatteryClick(object sender, RoutedEventArgs e)
+    {
+        _menuPopup.IsOpen = false;
+        _calendarPopup.IsOpen = false;
+        _trayOverflowPopup.IsOpen = false;
+        _controlCenterPopup.IsOpen = false;
+
+        if (_batteryPopup.IsOpen)
+        {
+            _batteryPopup.IsOpen = false;
+            return;
+        }
+
+        _batteryPopup.PlacementTarget = BatteryButton;
+        _batteryPopup.HorizontalOffset = -170;
+        _batteryPopup.VerticalOffset = 4;
+        BatteryButton.Tag = "Active";
+        _batteryPopup.IsOpen = true;
+    }
+
+    private void OnWifiBarClick(object sender, RoutedEventArgs e)
+    {
+        _menuPopup.IsOpen = false;
+        _calendarPopup.IsOpen = false;
+        _trayOverflowPopup.IsOpen = false;
+
+        if (_controlCenterPopup.IsOpen)
+        {
+            _controlCenterPopup.IsOpen = false;
+            return;
+        }
+
+        _controlCenterPopup.SwitchPage(ControlCenterPopup.SubPage.Wifi);
+        _controlCenterPopup.PlacementTarget = WifiBarButton;
+        _controlCenterPopup.HorizontalOffset = -230;
+        _controlCenterPopup.VerticalOffset = 4;
+        ControlCenterButton.Tag = "Active";
+        _controlCenterPopup.IsOpen = true;
+    }
+
+    private void OnControlCenterClick(object sender, RoutedEventArgs e)
+    {
+        _menuPopup.IsOpen = false;
+        _calendarPopup.IsOpen = false;
+        _trayOverflowPopup.IsOpen = false;
+
+        if (_controlCenterPopup.IsOpen)
+        {
+            _controlCenterPopup.IsOpen = false;
+            return;
+        }
+
+        _controlCenterPopup.SwitchPage(ControlCenterPopup.SubPage.Main);
+        _controlCenterPopup.PlacementTarget = ControlCenterButton;
+        _controlCenterPopup.HorizontalOffset = -270;
+        _controlCenterPopup.VerticalOffset = 4;
+        ControlCenterButton.Tag = "Active";
+        _controlCenterPopup.IsOpen = true;
+        ControlCenterRequested?.Invoke();
+    }
 
     private void OnClockClick(object sender, RoutedEventArgs e)
     {
         _menuPopup.IsOpen = false;
         _trayOverflowPopup.IsOpen = false;
+        _controlCenterPopup.IsOpen = false;
         if (_calendarPopup.IsOpen)
         {
             _calendarPopup.IsOpen = false;
@@ -570,16 +763,107 @@ public partial class MenuBarWindow : Window
         try { Process.Start(new ProcessStartInfo(uri) { UseShellExecute = true }); } catch { }
     }
 
+    private static void LaunchProcess(string fileName, string? arguments = null)
+    {
+        try { Process.Start(new ProcessStartInfo(fileName, arguments ?? string.Empty) { UseShellExecute = true }); } catch { }
+    }
+
+    private static void LaunchTerminal(bool asAdmin)
+    {
+        try
+        {
+            var psi = new ProcessStartInfo("wt.exe") { UseShellExecute = true };
+            if (asAdmin) psi.Verb = "runas";
+            Process.Start(psi);
+        }
+        catch
+        {
+            try
+            {
+                var fallback = new ProcessStartInfo("powershell.exe") { UseShellExecute = true };
+                if (asAdmin) fallback.Verb = "runas";
+                Process.Start(fallback);
+            }
+            catch { }
+        }
+    }
+
+    private static void SendWinChord(ushort vk)
+    {
+        const uint INPUT_KEYBOARD = 1;
+        const uint KEYEVENTF_KEYUP = 0x0002;
+        const ushort VK_LWIN = 0x5B;
+
+        var inputs = new INPUT[4];
+        inputs[0].type = INPUT_KEYBOARD;
+        inputs[0].u.ki.wVk = VK_LWIN;
+        inputs[1].type = INPUT_KEYBOARD;
+        inputs[1].u.ki.wVk = vk;
+        inputs[2].type = INPUT_KEYBOARD;
+        inputs[2].u.ki.wVk = vk;
+        inputs[2].u.ki.dwFlags = KEYEVENTF_KEYUP;
+        inputs[3].type = INPUT_KEYBOARD;
+        inputs[3].u.ki.wVk = VK_LWIN;
+        inputs[3].u.ki.dwFlags = KEYEVENTF_KEYUP;
+        SendInput((uint)inputs.Length, inputs, Marshal.SizeOf<INPUT>());
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct INPUT
+    {
+        public uint type;
+        public InputUnion u;
+    }
+
+    [StructLayout(LayoutKind.Explicit)]
+    private struct InputUnion
+    {
+        [FieldOffset(0)] public MOUSEINPUT mi;
+        [FieldOffset(0)] public KEYBDINPUT ki;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MOUSEINPUT
+    {
+        public int dx, dy;
+        public uint mouseData, dwFlags, time;
+        public nuint dwExtraInfo;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct KEYBDINPUT
+    {
+        public ushort wVk, wScan;
+        public uint dwFlags, time;
+        public nuint dwExtraInfo;
+    }
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
+
     protected override void OnClosed(EventArgs e)
     {
         Microsoft.Win32.SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged;
         _statusTimer.Stop();
+        _imeTimer.Stop();
+        if (_monitor.IsPrimary && Hwnd != 0)
+        {
+            DeregisterShellHookWindow(Hwnd);
+        }
         BarGlassBackdrop.Dispose();
         base.OnClosed(e);
     }
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern uint RegisterWindowMessageW(string lpString);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool RegisterShellHookWindow(nint hWnd);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool DeregisterShellHookWindow(nint hWnd);
 
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]

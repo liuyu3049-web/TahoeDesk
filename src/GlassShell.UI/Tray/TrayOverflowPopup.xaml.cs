@@ -18,6 +18,8 @@ public partial class TrayOverflowPopup : Popup
 {
     private readonly OutsideClickDismissHook _dismissHook;
     private bool _isDarkMode = true;
+    private string? _draggingPrefKey;
+    private Point _dragStartPoint;
 
     public TrayOverflowPopup()
     {
@@ -38,6 +40,7 @@ public partial class TrayOverflowPopup : Popup
 
     public event Action<TrayDisplayItem, TrayMouseAction, ScreenRect, Point>? TrayIconInvoked;
     public event Action<TrayDisplayItem>? TrayIconPinToggled;
+    public event Action<string, string>? TrayOverflowReordered;
     public event Action? NativeTaskbarPeekRequested;
 
     private IEnumerable<nint> CollectOpenHwnds()
@@ -102,6 +105,7 @@ public partial class TrayOverflowPopup : Popup
             CornerRadius = new CornerRadius(7),
             Background = Brushes.Transparent,
             Cursor = Cursors.Hand,
+            AllowDrop = true,
             ToolTip = string.IsNullOrWhiteSpace(item.Record.Tooltip) ? "托盘应用" : item.Record.Tooltip,
             Child = iconEl
         };
@@ -112,6 +116,48 @@ public partial class TrayOverflowPopup : Popup
         tile.MouseLeftButtonDown += (_, e) =>
         {
             e.Handled = true;
+            _dragStartPoint = e.GetPosition(IconsWrapPanel);
+            _draggingPrefKey = item.Record.PreferenceKey;
+
+            if (e.ClickCount >= 2)
+            {
+                _draggingPrefKey = null;
+                var (rect, pt) = CaptureScreenMetrics(tile);
+                IsOpen = false;
+                TrayIconInvoked?.Invoke(item, TrayMouseAction.LeftDoubleClick, rect, pt);
+            }
+        };
+
+        tile.MouseMove += (_, e) =>
+        {
+            if (e.LeftButton == MouseButtonState.Pressed && _draggingPrefKey == item.Record.PreferenceKey)
+            {
+                var pos = e.GetPosition(IconsWrapPanel);
+                if ((pos - _dragStartPoint).Length > 7.0)
+                {
+                    _draggingPrefKey = null;
+                    DragDrop.DoDragDrop(tile, new DataObject("GlassShell.TrayOverflowKey", item.Record.PreferenceKey), DragDropEffects.Move);
+                }
+            }
+        };
+
+        tile.Drop += (_, e) =>
+        {
+            if (!e.Data.GetDataPresent("GlassShell.TrayOverflowKey")) return;
+            e.Handled = true;
+            string sourceKey = (string)e.Data.GetData("GlassShell.TrayOverflowKey");
+            if (!string.Equals(sourceKey, item.Record.PreferenceKey, StringComparison.OrdinalIgnoreCase))
+            {
+                TrayOverflowReordered?.Invoke(sourceKey, item.Record.PreferenceKey);
+            }
+        };
+
+        tile.MouseLeftButtonUp += (_, e) =>
+        {
+            e.Handled = true;
+            if (_draggingPrefKey != item.Record.PreferenceKey) return;
+            _draggingPrefKey = null;
+
             if ((Keyboard.Modifiers & ModifierKeys.Shift) != 0)
             {
                 TrayIconPinToggled?.Invoke(item);
@@ -119,9 +165,8 @@ public partial class TrayOverflowPopup : Popup
             }
 
             var (rect, pt) = CaptureScreenMetrics(tile);
-            var action = e.ClickCount >= 2 ? TrayMouseAction.LeftDoubleClick : TrayMouseAction.LeftClick;
             IsOpen = false;
-            TrayIconInvoked?.Invoke(item, action, rect, pt);
+            TrayIconInvoked?.Invoke(item, TrayMouseAction.LeftClick, rect, pt);
         };
 
         tile.MouseRightButtonUp += (_, e) =>

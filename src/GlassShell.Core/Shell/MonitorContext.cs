@@ -118,4 +118,5 @@ public readonly record struct ForegroundWindowInfo(
     ScreenRect Bounds,
     bool IsMinimized,
     bool IsCloaked,
-    string WindowTitle = "");
+    string WindowTitle = "",
+    bool IsMaximized = false);

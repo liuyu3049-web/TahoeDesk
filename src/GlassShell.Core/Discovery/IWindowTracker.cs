@@ -9,6 +9,7 @@ public interface IWindowTracker : IDisposable
     IReadOnlyList<WindowInfo> GetTopLevelWindows();
     event Action? WindowsChanged;
     event Action<ForegroundWindowInfo>? ForegroundChanged;
+    event Action<nint>? WindowMinimizing;
     event Action? TaskbarShownDetected;
     void Start();
     void Stop();

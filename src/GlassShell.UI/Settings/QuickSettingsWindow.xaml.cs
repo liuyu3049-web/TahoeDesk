@@ -39,6 +39,7 @@ public partial class QuickSettingsWindow : Window
         MagnificationCheck.IsChecked = settings.DockMagnificationEnabled;
         MagScaleSlider.Value = settings.DockMagnificationScale;
         RecentAppsCheck.IsChecked = settings.ShowRecentApps;
+        WinKeyLaunchpadCheck.IsChecked = settings.InterceptWinKeyForLaunchpad;
         _loading = false;
 
         SourceInitialized += (_, _) => WindowInteropHelperEx.ExcludeFromCapture(new System.Windows.Interop.WindowInteropHelper(this).Handle);
@@ -104,7 +105,8 @@ public partial class QuickSettingsWindow : Window
             DockMagnificationEnabled = MagnificationCheck.IsChecked == true,
             DockMagnificationScale = Math.Round(MagScaleSlider.Value, 2),
             DockAutoHide = autoHide,
-            ShowRecentApps = RecentAppsCheck.IsChecked == true
+            ShowRecentApps = RecentAppsCheck.IsChecked == true,
+            InterceptWinKeyForLaunchpad = WinKeyLaunchpadCheck.IsChecked == true
         };
 
         bool resolvedDark = theme switch

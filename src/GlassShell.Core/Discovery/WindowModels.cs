@@ -1,4 +1,5 @@
 using System.Collections.Generic;
+using GlassShell.Core.Shell;
 
 namespace GlassShell.Core.Discovery;
 
@@ -15,6 +16,7 @@ public enum DockItemKind
     Launchpad,
     Application,
     Folder,
+    MinimizedWindow,
     RecycleBin
 }
 
@@ -26,7 +28,9 @@ public sealed record WindowInfo(
     string Title,
     string ClassName,
     bool IsMinimized,
-    bool IsFlashing);
+    bool IsFlashing,
+    bool IsMaximized = false,
+    ScreenRect Bounds = default);
 
 public sealed record DockItemModel(
     string Id,

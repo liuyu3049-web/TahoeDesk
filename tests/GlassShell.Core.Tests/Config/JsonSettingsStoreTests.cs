@@ -21,6 +21,7 @@ public sealed class JsonSettingsStoreTests : IDisposable
         Assert.True(s.DockMagnificationEnabled);
         Assert.Equal(1.6, s.DockMagnificationScale);
         Assert.Equal(DockAutoHideMode.Smart, s.DockAutoHide);
+        Assert.False(s.ShowMenuBarWifiIcon);
         Assert.True(s.ShowRecentApps);
     }
 

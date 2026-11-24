@@ -127,7 +127,7 @@ public static class DockModelCoordinator
             }
         }
 
-        // Section 3: Pinned folders + Recycle Bin rightmost
+        // Section 3: Pinned folders + Minimized window thumbnails + Recycle Bin rightmost
         foreach (var folder in settings.PinnedFolderPaths)
         {
             if (string.IsNullOrWhiteSpace(folder)) continue;
@@ -144,6 +144,30 @@ public static class DockModelCoordinator
                 IsRunning: false,
                 OpenWindowHandles: [],
                 IsFlashing: false));
+        }
+
+        if (settings.ShowMinimizedWindowsInDock)
+        {
+            const int maxMinimizedDockTiles = 4;
+            int addedMinimized = 0;
+            foreach (var win in runningWindows)
+            {
+                if (!win.IsMinimized || win.Hwnd == 0) continue;
+                if (addedMinimized >= maxMinimizedDockTiles) break;
+
+                string title = string.IsNullOrWhiteSpace(win.Title) ? win.AppDisplayName : win.Title;
+                items.Add(new DockItemModel(
+                    Id: $"min:{win.Hwnd}",
+                    Title: title,
+                    TargetPath: win.ExecutablePath,
+                    Kind: DockItemKind.MinimizedWindow,
+                    Section: DockSection.FoldersAndTrash,
+                    IsPinned: false,
+                    IsRunning: true,
+                    OpenWindowHandles: [win.Hwnd],
+                    IsFlashing: win.IsFlashing));
+                addedMinimized++;
+            }
         }
 
         items.Add(new DockItemModel(
