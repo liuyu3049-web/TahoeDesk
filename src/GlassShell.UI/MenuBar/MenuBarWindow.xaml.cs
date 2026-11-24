@@ -38,12 +38,16 @@ public partial class MenuBarWindow : Window
     private readonly ControlCenterPopup _controlCenterPopup = new();
     private readonly BatteryPopup _batteryPopup = new();
     private readonly DispatcherTimer _statusTimer;
+    private readonly DispatcherTimer _imeTimer;
 
     private MonitorContext _monitor;
     private GlassSettings _settings;
     private IReadOnlyList<TrayDisplayItem> _lastTrayItems = [];
     private Button? _activeMenuButton;
     private uint _taskbarCreatedMsg;
+    private uint _shellHookMsg;
+
+    public event Action<nint>? WindowFlashDetected;
 
     public MenuBarWindow(
         MonitorContext monitor,
@@ -85,6 +89,11 @@ public partial class MenuBarWindow : Window
         _statusTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
         _statusTimer.Tick += (_, _) => RefreshSystemStatus();
         _statusTimer.Start();
+
+        _imeTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(200) };
+        _imeTimer.Tick += (_, _) => _vm.InputMethodLabel = _statusProvider.CaptureImeBadgeOnly(_vm.ActiveTargetHwnd);
+        _imeTimer.Start();
+
         RefreshSystemStatus();
     }
 
@@ -198,6 +207,11 @@ public partial class MenuBarWindow : Window
         _batteryPopup.OwnerAnchorHwnd = hwnd;
 
         _taskbarCreatedMsg = RegisterWindowMessageW("TaskbarCreated");
+        if (_monitor.IsPrimary)
+        {
+            _shellHookMsg = RegisterWindowMessageW("SHELLHOOK");
+            RegisterShellHookWindow(hwnd);
+        }
         HwndSource.FromHwnd(hwnd)?.AddHook(WndProc);
     }
 
@@ -207,6 +221,15 @@ public partial class MenuBarWindow : Window
         {
             handled = true;
             return 0;
+        }
+
+        if (_shellHookMsg != 0 && (uint)msg == _shellHookMsg && lParam != 0)
+        {
+            int code = unchecked((int)wParam);
+            if (code == 0x8006 /* HSHELL_FLASH */)
+            {
+                WindowFlashDetected?.Invoke(lParam);
+            }
         }
 
         if (_taskbarCreatedMsg != 0 && (uint)msg == _taskbarCreatedMsg && !_trayProxyHost.IsSelfBroadcastActive)
@@ -593,7 +616,15 @@ public partial class MenuBarWindow : Window
 
     private void OnImeClick(object sender, RoutedEventArgs e)
     {
-        _dispatcher.Dispatch(_vm.ActiveTargetHwnd, new MenuInvokeAction(MenuActionKind.KeyboardShortcut, Shortcut: "Win+Space"));
+        SystemStatusProvider.ToggleChineseEnglishOrLayout(_vm.ActiveTargetHwnd);
+        _vm.InputMethodLabel = _statusProvider.CaptureImeBadgeOnly(_vm.ActiveTargetHwnd);
+    }
+
+    private void OnImeRightClick(object sender, MouseButtonEventArgs e)
+    {
+        e.Handled = true;
+        SystemStatusProvider.SwitchKeyboardLayout(_vm.ActiveTargetHwnd);
+        _vm.InputMethodLabel = _statusProvider.CaptureImeBadgeOnly(_vm.ActiveTargetHwnd);
     }
 
     private void OnSpotlightClick(object sender, RoutedEventArgs e)
@@ -692,12 +723,21 @@ public partial class MenuBarWindow : Window
     {
         Microsoft.Win32.SystemEvents.UserPreferenceChanged -= OnUserPreferenceChanged;
         _statusTimer.Stop();
+        _imeTimer.Stop();
         BarGlassBackdrop.Dispose();
         base.OnClosed(e);
     }
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern uint RegisterWindowMessageW(string lpString);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool RegisterShellHookWindow(nint hWnd);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool DeregisterShellHookWindow(nint hWnd);
 
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]

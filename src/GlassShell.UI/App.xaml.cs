@@ -170,6 +170,7 @@ public partial class App : Application
                 Shutdown(0);
             };
             menuBar.SpotlightRequested += () => ToggleSpotlight(monitor);
+            menuBar.WindowFlashDetected += hwnd => _windowTracker.MarkWindowFlashing(hwnd);
 
             dock.LaunchpadRequested += () => ToggleLaunchpad(monitor);
             dock.SettingsUpdated += ApplyUpdatedSettings;
@@ -233,6 +234,7 @@ public partial class App : Application
         {
             foreach (var s in _shells) s.MenuBar.UpdateTrayItems(items);
         });
+        _trayProxyHost.TrayIconFlashingDetected += pid => _windowTracker.MarkProcessFlashing(pid);
         _trayProxyHost.Start();
 
         _dockDebounceTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(180) };
@@ -250,8 +252,8 @@ public partial class App : Application
         _periodicRefreshTimer.Tick += (_, _) => _ = RefreshDockItemsAsync();
         _periodicRefreshTimer.Start();
 
-        _foregroundReconcileTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(350) };
-        _foregroundReconcileTimer.Tick += (_, _) => ReconcileForegroundWindow();
+        _foregroundReconcileTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
+        _foregroundReconcileTimer.Tick += (_, _) => ReconcileForegroundAndMonitorVisibility();
         _foregroundReconcileTimer.Start();
 
         _indexRefreshTimer = new DispatcherTimer { Interval = TimeSpan.FromMinutes(3) };
@@ -259,15 +261,100 @@ public partial class App : Application
         _indexRefreshTimer.Start();
     }
 
-    private void ReconcileForegroundWindow()
+    private void ReconcileForegroundAndMonitorVisibility()
     {
         if (_windowTracker is null) return;
         var fg = _windowTracker.GetForegroundWindowInfo();
-        if (fg.Hwnd == 0 || fg.ProcessId == (uint)Environment.ProcessId) return;
-
-        if (fg.Hwnd != _lastForegroundHwnd || !string.Equals(fg.WindowTitle, _lastForegroundTitle, StringComparison.Ordinal))
+        if (fg.Hwnd != 0 && fg.ProcessId != (uint)Environment.ProcessId)
         {
-            OnForegroundChanged(fg);
+            if (fg.Hwnd != _lastForegroundHwnd || !string.Equals(fg.WindowTitle, _lastForegroundTitle, StringComparison.Ordinal))
+            {
+                OnForegroundChanged(fg);
+            }
+        }
+
+        // Always evaluate per-monitor fullscreen & maximize states independently (catches maximize/un-maximize on same HWND!)
+        EvaluatePerMonitorVisibility(fg);
+    }
+
+    private void EvaluatePerMonitorVisibility(ForegroundWindowInfo fg)
+    {
+        if (_windowTracker is null || _taskbarNative is null || _shells.Count == 0) return;
+
+        bool d3dFs = _taskbarNative.IsD3DFullscreenActive();
+        var visibleWindows = _windowTracker.GetTopLevelWindows();
+        bool primaryFullscreen = false;
+
+        foreach (var s in _shells)
+        {
+            var mon = s.Monitor;
+            bool monFullscreen = false;
+            bool monMaximized = false;
+
+            foreach (var w in visibleWindows)
+            {
+                if (w.IsMinimized || w.Bounds.Width <= 40 || w.Bounds.Height <= 40) continue;
+                int cx = (w.Bounds.Left + w.Bounds.Right) / 2;
+                int cy = (w.Bounds.Top + w.Bounds.Bottom) / 2;
+                if (cx < mon.Bounds.Left || cx >= mon.Bounds.Right || cy < mon.Bounds.Top || cy >= mon.Bounds.Bottom)
+                {
+                    continue;
+                }
+
+                // True fullscreen covers entire monitor bounds within 2px tolerance
+                if (w.Bounds.Left <= mon.Bounds.Left + 2
+                    && w.Bounds.Top <= mon.Bounds.Top + 2
+                    && w.Bounds.Right >= mon.Bounds.Right - 2
+                    && w.Bounds.Bottom >= mon.Bounds.Bottom - 2)
+                {
+                    monFullscreen = true;
+                }
+
+                if (w.IsMaximized)
+                {
+                    monMaximized = true;
+                }
+            }
+
+            if (mon.IsPrimary && d3dFs && fg.Hwnd != 0 && !fg.IsMinimized)
+            {
+                int fcx = (fg.Bounds.Left + fg.Bounds.Right) / 2;
+                int fcy = (fg.Bounds.Top + fg.Bounds.Bottom) / 2;
+                if (fcx >= mon.Bounds.Left && fcx < mon.Bounds.Right && fcy >= mon.Bounds.Top && fcy < mon.Bounds.Bottom)
+                {
+                    monFullscreen = true;
+                }
+            }
+
+            if (mon.IsPrimary) primaryFullscreen = monFullscreen;
+
+            var vis = monFullscreen ? Visibility.Collapsed : Visibility.Visible;
+            if (s.MenuBar.Visibility != vis) s.MenuBar.Visibility = vis;
+            if (s.Dock.Visibility != vis) s.Dock.Visibility = vis;
+            s.Dock.SetBottomOverlap(monMaximized || monFullscreen);
+        }
+
+        if (_winKeyHook is not null)
+        {
+            _winKeyHook.IsFullscreenActive = primaryFullscreen;
+        }
+
+        if (_stageManagerWindow is not null)
+        {
+            if (primaryFullscreen || !_settings.StageManagerEnabled)
+            {
+                if (_stageManagerWindow.IsVisible) _stageManagerWindow.Visibility = Visibility.Collapsed;
+            }
+            else
+            {
+                if (!_stageManagerWindow.IsVisible) _stageManagerWindow.Visibility = Visibility.Visible;
+                var primary = _shells.FirstOrDefault(x => x.Monitor.IsPrimary) ?? _shells[0];
+                bool fgOverlapsLeft = fg.Hwnd != 0 && !fg.IsMinimized
+                    && fg.ClassName is not ("Progman" or "WorkerW" or "Shell_TrayWnd" or "Shell_SecondaryTrayWnd")
+                    && fg.Bounds.Left < primary.Monitor.Bounds.Left + (int)(185 * primary.Monitor.DpiScale)
+                    && fg.Bounds.Right > primary.Monitor.Bounds.Left;
+                _stageManagerWindow.SetLeftEdgeOverlapped(fgOverlapsLeft || fg.IsMaximized);
+            }
         }
     }
 
@@ -281,6 +368,12 @@ public partial class App : Application
             return;
         }
 
+        // User switched to this app -> clear any unread/flashing Dock badge for it!
+        if (fg.ProcessId != 0)
+        {
+            _windowTracker?.ClearProcessFlashing(fg.ProcessId);
+        }
+
         if (fg.Hwnd != _lastForegroundHwnd)
         {
             foreach (var s in _shells)
@@ -292,29 +385,9 @@ public partial class App : Application
         _lastForegroundHwnd = fg.Hwnd;
         _lastForegroundTitle = fg.WindowTitle;
 
-        // Evaluate fullscreen & maximized auto-hide per monitor (floating windows NEVER hide Dock!)
-        bool anyFullscreen = false;
-        bool d3dFs = _taskbarNative.IsD3DFullscreenActive();
-        foreach (var s in _shells)
-        {
-            bool isFs = FullscreenDetector.IsFullscreen(fg, s.Monitor, d3dFs);
-            if (isFs) anyFullscreen = true;
+        EvaluatePerMonitorVisibility(fg);
 
-            if (fg.Hwnd != 0 && !fg.IsMinimized && !fg.IsCloaked)
-            {
-                bool onThisMonitor = fg.Bounds.Right > s.Monitor.Bounds.Left && fg.Bounds.Left < s.Monitor.Bounds.Right;
-                bool isNormalWindow = fg.ClassName is not ("Progman" or "WorkerW" or "Shell_TrayWnd" or "Shell_SecondaryTrayWnd");
-                bool shouldHideForMaximized = onThisMonitor && isNormalWindow && fg.IsMaximized;
-                Dispatcher.InvokeAsync(() => s.Dock.SetBottomOverlap(shouldHideForMaximized));
-            }
-        }
-        _taskbarController.UpdateFullscreenState(anyFullscreen);
-        if (_winKeyHook is not null)
-        {
-            _winKeyHook.IsFullscreenActive = anyFullscreen;
-        }
-
-        // Record live pre-minimize window rect & fresh snapshot so Dock minimize animation ALWAYS works cleanly
+        // Record live pre-minimize window rect & fresh snapshot so Dock Genie animation ALWAYS works cleanly
         if (fg.Hwnd != 0 && !fg.IsMinimized && !fg.IsCloaked && fg.Bounds.Width > 80 && fg.Bounds.Height > 60
             && fg.ClassName is not ("Progman" or "WorkerW" or "Shell_TrayWnd" or "Shell_SecondaryTrayWnd"))
         {
@@ -522,7 +595,32 @@ public partial class App : Application
     {
         _lastActiveProcessId = processId;
         WindowTracker.ActivateWindow(hwnd);
+        NudgeWindowIntoStageCenter(hwnd);
         ApplyStageManagerFocus(processId);
+    }
+
+    private void NudgeWindowIntoStageCenter(nint hwnd)
+    {
+        if (hwnd == 0 || _shells.Count == 0) return;
+        try
+        {
+            var primary = _shells.FirstOrDefault(s => s.Monitor.IsPrimary) ?? _shells[0];
+            if (GetWindowRect(hwnd, out RECT rc) && rc.Left > -10000)
+            {
+                int w = rc.Right - rc.Left;
+                int h = rc.Bottom - rc.Top;
+                int leftMarginPx = (int)(194 * primary.Monitor.DpiScale);
+                int availW = primary.Monitor.Bounds.Width - leftMarginPx - (int)(24 * primary.Monitor.DpiScale);
+
+                // Only gently nudge floating windows that overlap the left strip and fit inside the center-right stage
+                if (w < availW && rc.Left < primary.Monitor.Bounds.Left + leftMarginPx)
+                {
+                    int targetX = primary.Monitor.Bounds.Left + leftMarginPx + Math.Max(0, (availW - w) / 2);
+                    SetWindowPos(hwnd, 0, targetX, rc.Top, 0, 0, 0x0001 | 0x0004 | 0x0010 /* SWP_NOSIZE|SWP_NOZORDER|SWP_NOACTIVATE */);
+                }
+            }
+        }
+        catch { }
     }
 
     private List<StageGroupItem> BuildStageGroups(IReadOnlyList<WindowInfo> windows, uint activeProcessId)
@@ -617,7 +715,7 @@ public partial class App : Application
                 if (info.iMinAnimate != 0)
                 {
                     info.iMinAnimate = 0;
-                    if (SystemParametersInfoW(0x0049 /* SPI_SETANIMATION */, info.cbSize, ref info, 0))
+                    if (SystemParametersInfoW(0x0049 /* SPI_SETANIMATION */, info.cbSize, ref info, 0x0002 /* SPIF_SENDCHANGE */))
                     {
                         _suppressedMinAnimate = true;
                     }
@@ -634,7 +732,7 @@ public partial class App : Application
         try
         {
             var info = new ANIMATIONINFO { cbSize = (uint)Marshal.SizeOf<ANIMATIONINFO>(), iMinAnimate = _originalMinAnimate };
-            SystemParametersInfoW(0x0049 /* SPI_SETANIMATION */, info.cbSize, ref info, 0);
+            SystemParametersInfoW(0x0049 /* SPI_SETANIMATION */, info.cbSize, ref info, 0x0002 /* SPIF_SENDCHANGE */);
         }
         catch { }
     }
@@ -911,6 +1009,10 @@ public partial class App : Application
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool ShowWindowAsync(nint hWnd, int nCmdShow);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetWindowPos(nint hWnd, nint hWndInsertAfter, int x, int y, int cx, int cy, uint uFlags);
 
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]

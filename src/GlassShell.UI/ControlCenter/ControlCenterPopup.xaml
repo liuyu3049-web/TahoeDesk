@@ -278,9 +278,9 @@
                             <TextBlock x:Name="MuteGlyph" Text="🔊" FontSize="12" Foreground="{DynamicResource CcFgBrush}" />
                         </Button>
                         <TextBlock Text="声音" FontSize="11.5" FontWeight="SemiBold" FontFamily="Microsoft YaHei UI, Segoe UI" Foreground="{DynamicResource CcFgBrush}" VerticalAlignment="Center" />
-                        <TextBlock x:Name="VolumeValueText" DockPanel.Dock="Right" HorizontalAlignment="Right" Text="50%" FontSize="11" Foreground="{DynamicResource CcSubtleBrush}" VerticalAlignment="Center" Typography.NumeralAlignment="Tabular" />
+                        <TextBlock x:Name="VolumeValueText" DockPanel.Dock="Right" HorizontalAlignment="Right" Text="10%" FontSize="11" Foreground="{DynamicResource CcSubtleBrush}" VerticalAlignment="Center" Typography.NumeralAlignment="Tabular" />
                     </DockPanel>
-                    <Slider x:Name="VolumeSlider" Minimum="0" Maximum="100" Value="50" IsMoveToPointEnabled="True" ValueChanged="OnVolumeChanged" />
+                    <Slider x:Name="VolumeSlider" Minimum="0" Maximum="100" Value="10" IsMoveToPointEnabled="True" ValueChanged="OnVolumeChanged" />
                 </StackPanel>
             </Border>
 

@@ -37,14 +37,16 @@ public partial class ControlCenterPopup : Popup
     private ThemeMode _currentTheme = ThemeMode.System;
     private RadioState _radioState = RadioState.Unavailable;
     private bool _stageManagerEnabled;
-    private bool _suppressSliderEvents;
+    private bool _suppressSliderEvents = true;
     private SubPage _activePage = SubPage.Main;
     private int _pendingBrightness = -1;
     private int _brightnessWorkerActive;
 
     public ControlCenterPopup()
     {
+        _suppressSliderEvents = true;
         InitializeComponent();
+        _suppressSliderEvents = false;
         _dismissHook = new OutsideClickDismissHook(
             CollectOpenHwnds,
             () => Dispatcher.BeginInvoke(() => IsOpen = false));

@@ -9,6 +9,14 @@ public enum LaunchpadFilterMode
     Hidden
 }
 
+public enum LaunchpadSortMode
+{
+    Custom,
+    NameAsc,
+    NameDesc,
+    Pinyin
+}
+
 public sealed record LaunchpadEntry(
     string Id,
     string Title,

@@ -133,5 +133,25 @@ public sealed class LaunchpadLayoutTests
         Assert.True(mgr.RestoreApp("app:cfg"));
         var restoredPrimary = mgr.GetEntriesForFilter(LaunchpadFilterMode.Primary);
         Assert.Equal(2, restoredPrimary.Count);
+
+        // Release notes & ICE utilities are excluded from Primary, while Office stays Primary
+        Assert.True(LaunchpadLayoutManager.IsAuxiliaryUtility("发行说明"));
+        Assert.True(LaunchpadLayoutManager.IsAuxiliaryUtility("知识融合ICE"));
+        Assert.False(LaunchpadLayoutManager.IsAuxiliaryUtility("Microsoft Office"));
+
+        // Sorting respects locked items pinned at their exact slots
+        var sortMgr = new LaunchpadLayoutManager();
+        sortMgr.SyncWithInstalledApps(
+        [
+            new("app:z", "Zebra", @"C:\Z.exe", null, false, "z"),
+            new("app:b", "Beta", @"C:\B.exe", null, false, "b"),
+            new("app:a", "Alpha", @"C:\A.exe", null, false, "a")
+        ]);
+        Assert.True(sortMgr.ToggleLock("app:z"));
+        var sorted = sortMgr.GetEntriesForFilter(LaunchpadFilterMode.Primary, LaunchpadSortMode.NameAsc);
+        Assert.Equal("Zebra", sorted[0].Title); // Locked at slot 0!
+        Assert.Equal("Alpha", sorted[1].Title);
+        Assert.Equal("Beta", sorted[2].Title);
+        Assert.False(sortMgr.Reorder("app:z", "app:a")); // Cannot drag locked item
     }
 }

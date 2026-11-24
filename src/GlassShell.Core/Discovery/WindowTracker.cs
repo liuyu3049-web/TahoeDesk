@@ -31,9 +31,37 @@ public sealed class WindowTracker : IWindowTracker
     private const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
 
     private readonly uint _selfProcessId = (uint)Environment.ProcessId;
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<uint, byte> _flashingPids = new();
     private readonly List<nint> _hooks = [];
     private WinEventDelegate? _hookDelegate;
     private bool _started;
+
+    public void MarkWindowFlashing(nint hwnd)
+    {
+        if (hwnd == 0) return;
+        GetWindowThreadProcessId(hwnd, out uint pid);
+        if (pid != 0 && pid != _selfProcessId)
+        {
+            _flashingPids[pid] = 1;
+            WindowsChanged?.Invoke();
+        }
+    }
+
+    public void MarkProcessFlashing(uint pid)
+    {
+        if (pid != 0 && pid != _selfProcessId && _flashingPids.TryAdd(pid, 1))
+        {
+            WindowsChanged?.Invoke();
+        }
+    }
+
+    public void ClearProcessFlashing(uint pid)
+    {
+        if (pid != 0 && _flashingPids.TryRemove(pid, out _))
+        {
+            WindowsChanged?.Invoke();
+        }
+    }
 
     public event Action? WindowsChanged;
     public event Action<ForegroundWindowInfo>? ForegroundChanged;
@@ -184,7 +212,19 @@ public sealed class WindowTracker : IWindowTracker
         if (string.IsNullOrWhiteSpace(exePath)) return false;
 
         string appName = ResolveDisplayName(exePath);
-        info = new WindowInfo(hwnd, pid, exePath, appName, title, className, IsIconic(hwnd), IsFlashing: false);
+        GetWindowRect(hwnd, out RECT rc);
+        var bounds = new ScreenRect(rc.Left, rc.Top, rc.Right, rc.Bottom);
+        info = new WindowInfo(
+            hwnd,
+            pid,
+            exePath,
+            appName,
+            title,
+            className,
+            IsIconic(hwnd),
+            IsFlashing: _flashingPids.ContainsKey(pid),
+            IsMaximized: IsZoomed(hwnd),
+            Bounds: bounds);
         return true;
     }
 

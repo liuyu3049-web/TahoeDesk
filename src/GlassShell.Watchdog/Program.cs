@@ -98,7 +98,7 @@ internal static class Program
 
         // Restore native Windows minimize animation in case GlassShell exited uncleanly while suppressing top-left ghost
         var anim = new ANIMATIONINFO { cbSize = (uint)Marshal.SizeOf<ANIMATIONINFO>(), iMinAnimate = 1 };
-        SystemParametersInfoW(0x0049 /* SPI_SETANIMATION */, anim.cbSize, ref anim, 0);
+        SystemParametersInfoW(0x0049 /* SPI_SETANIMATION */, anim.cbSize, ref anim, 0x0002 /* SPIF_SENDCHANGE */);
 
         // Ask all running tray apps to re-register their icons back onto Explorer's native taskbar
         uint msg = RegisterWindowMessageW("TaskbarCreated");

@@ -68,8 +68,6 @@ public partial class DockWindow : Window
     private DockItemModel? _draggingItem;
     private string? _hoveredItemId;
     private string? _lastTooltipText;
-    private double _cachedTooltipW = 64;
-    private double _cachedTooltipH = 28;
 
     public DockWindow(
         MonitorContext monitor,
@@ -251,6 +249,25 @@ public partial class DockWindow : Window
         var iconScale = new ScaleTransform(1.0, 1.0);
         var slotTranslate = new TranslateTransform(0.0, 0.0);
 
+        var iconGrid = new Grid();
+        iconGrid.Children.Add(iconContent);
+
+        if (model.IsFlashing)
+        {
+            iconGrid.Children.Add(new Ellipse
+            {
+                Width = 11,
+                Height = 11,
+                Fill = new SolidColorBrush(Color.FromRgb(0xFF, 0x3B, 0x30)),
+                Stroke = new SolidColorBrush(Color.FromArgb(0xEE, 0xFF, 0xFF, 0xFF)),
+                StrokeThickness = 1.4,
+                HorizontalAlignment = HorizontalAlignment.Right,
+                VerticalAlignment = VerticalAlignment.Top,
+                Margin = new Thickness(0, 1, 1, 0),
+                IsHitTestVisible = false
+            });
+        }
+
         var iconFrame = new Border
         {
             Width = baseSize,
@@ -259,15 +276,17 @@ public partial class DockWindow : Window
             RenderTransformOrigin = new Point(0.5, 1.0), // Anchor at bottom-center -> scales cleanly UPWARD with zero layout pass!
             RenderTransform = iconScale,
             VerticalAlignment = VerticalAlignment.Top,
-            Child = iconContent
+            Child = iconGrid
         };
 
         var dot = new Ellipse
         {
-            Width = 4.5,
-            Height = 4.5,
-            Fill = new SolidColorBrush(Color.FromArgb(0xEB, 0xFF, 0xFF, 0xFF)),
-            Visibility = model.IsRunning ? Visibility.Visible : Visibility.Hidden,
+            Width = model.IsFlashing ? 5.5 : 4.5,
+            Height = model.IsFlashing ? 5.5 : 4.5,
+            Fill = new SolidColorBrush(model.IsFlashing
+                ? Color.FromRgb(0xFF, 0x45, 0x3A)
+                : Color.FromArgb(0xEB, 0xFF, 0xFF, 0xFF)),
+            Visibility = model.IsRunning || model.IsFlashing ? Visibility.Visible : Visibility.Hidden,
             HorizontalAlignment = HorizontalAlignment.Center,
             VerticalAlignment = VerticalAlignment.Bottom,
             Margin = new Thickness(0, 0, 0, 2)
@@ -566,14 +585,20 @@ public partial class DockWindow : Window
             LayoutFrame();
         }
 
-        // Auto-hide check (lightweight single Win32 GetCursorPos)
+        // Auto-hide check: reveal on bottom-edge hover, and hide IMMEDIATELY once cursor leaves the Dock capsule!
         bool isAtBottomEdge = false;
         double dwellMs = 0;
         if (GetCursorPos(out POINT cursorPx))
         {
             bool withinMonitorX = cursorPx.X >= _monitor.Bounds.Left && cursorPx.X <= _monitor.Bounds.Right;
-            bool nearBottom = cursorPx.Y >= _monitor.Bounds.Bottom - 4 && cursorPx.Y <= _monitor.Bounds.Bottom;
-            bool insideRevealedDock = _currentSlideY < 10.0 && cursorPx.Y >= _monitor.Bounds.Bottom - (int)(Height * _monitor.DpiScale);
+            bool nearBottom = cursorPx.Y >= _monitor.Bounds.Bottom - 5 && cursorPx.Y <= _monitor.Bounds.Bottom;
+
+            double dockLeftPx = Left * _monitor.DpiScale;
+            double dockRightPx = (Left + Width) * _monitor.DpiScale;
+            double dockTopZonePx = _monitor.Bounds.Bottom - (_settings.DockIconSize + 36) * _monitor.DpiScale;
+            bool insideRevealedDock = _currentSlideY < 10.0
+                && cursorPx.X >= dockLeftPx && cursorPx.X <= dockRightPx
+                && cursorPx.Y >= dockTopZonePx && cursorPx.Y <= _monitor.Bounds.Bottom;
 
             if (withinMonitorX && (nearBottom || insideRevealedDock))
             {
@@ -688,7 +713,7 @@ public partial class DockWindow : Window
             _hoveredItemId = hoveredVisual.Model.Id;
             ShowOrUpdateInlineTooltip(hoveredVisual.Model.Title, hoveredIconCenterX, hoveredIconTopY, canvasW);
         }
-        else if (_hoveredItemId is not null || InlineTooltip.Opacity > 0.01)
+        else if (_hoveredItemId is not null || InlineTooltipAnchor.Opacity > 0.01)
         {
             _hoveredItemId = null;
             HideInlineTooltip();
@@ -701,29 +726,26 @@ public partial class DockWindow : Window
         {
             _lastTooltipText = text;
             InlineTooltipText.Text = text;
-            InlineTooltip.InvalidateMeasure();
-            InlineTooltip.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
-            InlineTooltip.Arrange(new Rect(InlineTooltip.DesiredSize));
-            _cachedTooltipW = InlineTooltip.ActualWidth > 1 ? InlineTooltip.ActualWidth : (InlineTooltip.DesiredSize.Width > 0 ? InlineTooltip.DesiredSize.Width : 64);
-            _cachedTooltipH = InlineTooltip.ActualHeight > 1 ? InlineTooltip.ActualHeight : (InlineTooltip.DesiredSize.Height > 0 ? InlineTooltip.DesiredSize.Height : 28);
         }
 
-        double targetX = Math.Clamp(iconCenterX - _cachedTooltipW * 0.5, 4, Math.Max(4, canvasW - _cachedTooltipW - 4));
-        double targetY = Math.Max(2, iconTopY - _cachedTooltipH - 7.0);
+        // Fixed 320-DIP centering wrapper -> tooltip center & downward arrow are mathematically guaranteed at iconCenterX!
+        const double wrapperHalfW = 160.0;
+        double targetX = iconCenterX - wrapperHalfW;
+        double targetY = Math.Max(2, iconTopY - 36.0);
         InlineTooltipTranslate.X = Math.Round(targetX);
         InlineTooltipTranslate.Y = Math.Round(targetY);
 
-        if (InlineTooltip.Opacity < 0.99)
+        if (InlineTooltipAnchor.Opacity < 0.99)
         {
-            InlineTooltip.Opacity = 1.0;
+            InlineTooltipAnchor.Opacity = 1.0;
         }
     }
 
     private void HideInlineTooltip()
     {
-        if (InlineTooltip.Opacity > 0.01)
+        if (InlineTooltipAnchor.Opacity > 0.01)
         {
-            InlineTooltip.Opacity = 0.0;
+            InlineTooltipAnchor.Opacity = 0.0;
         }
     }
 

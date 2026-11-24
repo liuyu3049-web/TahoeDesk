@@ -82,9 +82,10 @@
                 <Button x:Name="ImeButton"
                         Style="{StaticResource MenuBarButtonStyle}"
                         Padding="6,0"
-                        ToolTip="切换输入法"
-                        Click="OnImeClick">
-                    <Border BorderBrush="{DynamicResource MenuBarForegroundBrush}" BorderThickness="1" CornerRadius="3" Padding="3,0">
+                        ToolTip="左键切换中/英文 · 右键切换输入法"
+                        Click="OnImeClick"
+                        MouseRightButtonUp="OnImeRightClick">
+                    <Border BorderBrush="{DynamicResource MenuBarForegroundBrush}" BorderThickness="1" CornerRadius="3" Padding="4,0">
                         <TextBlock Text="{Binding InputMethodLabel}" FontSize="10" FontWeight="SemiBold" />
                     </Border>
                 </Button>

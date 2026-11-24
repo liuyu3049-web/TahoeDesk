@@ -16,7 +16,21 @@ public static class InstalledAppScanner
 {
     private static readonly string[] ExcludedNameKeywords =
     [
-        "uninstall", "卸载", "readme", "帮助", "help", "documentation", "manual", "license", "website", "主页"
+        "uninstall", "卸载", "readme", "read me", "发行说明", "更新日志", "release notes", "changelog",
+        "帮助", "help", "documentation", "manual", "使用手册", "说明文档", "license", "许可", "授权",
+        "website", "主页", "官网", "知识融合", "指南", "教程", "tutorial", "guide", "feedback", "反馈",
+        "support", "技术支持", "配置工具", "修复", "repair", "diagnostics", "诊断", "命令行", "command prompt for",
+        "developer powershell", "developer command", "native tools"
+    ];
+
+    private static readonly string[] ExcludedTargetExtensions =
+    [
+        ".url", ".chm", ".txt", ".pdf", ".html", ".htm", ".md", ".bat", ".cmd", ".ps1", ".msc", ".cpl", ".vbs", ".rtf", ".doc", ".docx"
+    ];
+
+    private static readonly string[] ExcludedTargetExecutables =
+    [
+        "hh.exe", "msiexec.exe", "rundll32.exe", "regedit.exe", "mmc.exe", "wscript.exe", "cscript.exe"
     ];
 
     public static IReadOnlyList<InstalledAppEntry> ScanInstalledApps()
@@ -49,11 +63,7 @@ public static class InstalledAppScanner
                     ? resolvedTarget!
                     : lnk;
 
-                if (launchTarget.EndsWith(".url", StringComparison.OrdinalIgnoreCase)
-                    || launchTarget.EndsWith(".chm", StringComparison.OrdinalIgnoreCase)
-                    || launchTarget.EndsWith(".txt", StringComparison.OrdinalIgnoreCase)
-                    || launchTarget.EndsWith(".pdf", StringComparison.OrdinalIgnoreCase)
-                    || launchTarget.Contains("unins", StringComparison.OrdinalIgnoreCase))
+                if (IsExcludedTarget(launchTarget))
                 {
                     continue;
                 }
@@ -177,6 +187,23 @@ public static class InstalledAppScanner
                 yield return nested;
             }
         }
+    }
+
+    private static bool IsExcludedTarget(string path)
+    {
+        if (path.Contains("unins", StringComparison.OrdinalIgnoreCase)) return true;
+        foreach (string ext in ExcludedTargetExtensions)
+        {
+            if (path.EndsWith(ext, StringComparison.OrdinalIgnoreCase)) return true;
+        }
+
+        string fileName = Path.GetFileName(path);
+        foreach (string exe in ExcludedTargetExecutables)
+        {
+            if (string.Equals(fileName, exe, StringComparison.OrdinalIgnoreCase)) return true;
+        }
+
+        return false;
     }
 
     private static bool IsExcludedName(string name)

@@ -116,6 +116,7 @@ public partial class LaunchpadWindow : Window
 
         SearchBox.Text = string.Empty;
         SearchPlaceholder.Visibility = Visibility.Visible;
+        UpdateSortLabel();
         RenderCurrentView();
 
         Show();
@@ -224,6 +225,29 @@ public partial class LaunchpadWindow : Window
         };
         iconHost.Children.Add(iconVisual);
 
+        if (!isInsideFolder && _layout.IsLocked(entry.Id))
+        {
+            iconHost.Children.Add(new Border
+            {
+                Width = 18,
+                Height = 18,
+                CornerRadius = new CornerRadius(9),
+                Background = new SolidColorBrush(Color.FromArgb(0xCC, 0x1C, 0x1E, 0x26)),
+                BorderBrush = new SolidColorBrush(Color.FromArgb(0x88, 0xFF, 0xFF, 0xFF)),
+                BorderThickness = new Thickness(0.8),
+                HorizontalAlignment = HorizontalAlignment.Right,
+                VerticalAlignment = VerticalAlignment.Top,
+                Margin = new Thickness(0, -2, -2, 0),
+                Child = new TextBlock
+                {
+                    Text = "🔒",
+                    FontSize = 9,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center
+                }
+            });
+        }
+
         var label = new TextBlock
         {
             Text = entry.Title,
@@ -279,7 +303,7 @@ public partial class LaunchpadWindow : Window
 
         tile.MouseMove += (_, e) =>
         {
-            if (!isInsideFolder && e.LeftButton == MouseButtonState.Pressed && _draggingEntryId == entry.Id)
+            if (!isInsideFolder && e.LeftButton == MouseButtonState.Pressed && _draggingEntryId == entry.Id && !_layout.IsLocked(entry.Id))
             {
                 var pos = e.GetPosition(this);
                 if ((pos - _dragStart).Length > 10)
@@ -297,12 +321,14 @@ public partial class LaunchpadWindow : Window
             string sourceId = (string)e.Data.GetData("GlassShell.LaunchpadId");
             if (string.Equals(sourceId, entry.Id, StringComparison.OrdinalIgnoreCase)) return;
 
-            bool shiftReorder = (Keyboard.Modifiers & ModifierKeys.Shift) != 0;
-            bool changed = shiftReorder
-                ? _layout.Reorder(sourceId, entry.Id)
-                : _layout.MergeIntoFolder(sourceId, entry.Id);
+            // Default drag = smooth auto-flow reorder; Ctrl+Drag = group into folder!
+            bool ctrlFolder = (Keyboard.Modifiers & ModifierKeys.Control) != 0;
+            bool changed = ctrlFolder
+                ? _layout.MergeIntoFolder(sourceId, entry.Id)
+                : _layout.Reorder(sourceId, entry.Id);
             if (changed)
             {
+                UpdateSortLabel();
                 _layout.Save(_layoutPath);
                 RenderCurrentView();
             }
@@ -364,6 +390,16 @@ public partial class LaunchpadWindow : Window
             }
             else
             {
+                bool locked = _layout.IsLocked(entry.Id);
+                var lockItem = new MenuItem { Header = locked ? "解除位置锁定" : "锁定此图标位置" };
+                lockItem.Click += (_, _) =>
+                {
+                    _layout.ToggleLock(entry.Id);
+                    _layout.Save(_layoutPath);
+                    RenderCurrentView();
+                };
+                ctx.Items.Add(lockItem);
+
                 var hideItem = new MenuItem { Header = "在启动台中隐藏此应用" };
                 hideItem.Click += (_, _) =>
                 {
@@ -514,6 +550,31 @@ public partial class LaunchpadWindow : Window
     private void OnFilterPrimaryClick(object sender, RoutedEventArgs e) => SetFilterMode(LaunchpadFilterMode.Primary);
     private void OnFilterAllClick(object sender, RoutedEventArgs e) => SetFilterMode(LaunchpadFilterMode.All);
     private void OnFilterHiddenClick(object sender, RoutedEventArgs e) => SetFilterMode(LaunchpadFilterMode.Hidden);
+
+    private void OnCycleSortModeClick(object sender, RoutedEventArgs e)
+    {
+        _layout.SortMode = _layout.SortMode switch
+        {
+            LaunchpadSortMode.Custom => LaunchpadSortMode.NameAsc,
+            LaunchpadSortMode.NameAsc => LaunchpadSortMode.NameDesc,
+            LaunchpadSortMode.NameDesc => LaunchpadSortMode.Pinyin,
+            _ => LaunchpadSortMode.Custom
+        };
+        UpdateSortLabel();
+        _layout.Save(_layoutPath);
+        RenderCurrentView();
+    }
+
+    private void UpdateSortLabel()
+    {
+        SortModeLabel.Text = _layout.SortMode switch
+        {
+            LaunchpadSortMode.NameAsc => "排序: A–Z",
+            LaunchpadSortMode.NameDesc => "排序: Z–A",
+            LaunchpadSortMode.Pinyin => "排序: 拼音",
+            _ => "排序: 自定义"
+        };
+    }
 
     private void SetFilterMode(LaunchpadFilterMode mode)
     {

@@ -109,6 +109,31 @@
                         </Button>
                     </StackPanel>
                 </Border>
+
+                <!-- Sort mode toggle pill (自定义 / 名称 A-Z / 名称 Z-A / 拼音) -->
+                <Button x:Name="SortModeBtn"
+                        Margin="10,0,0,0"
+                        Height="32"
+                        Padding="12,0"
+                        FontSize="11.5"
+                        FontFamily="Microsoft YaHei UI, Segoe UI"
+                        Foreground="#F2FFFFFF"
+                        Background="#28FFFFFF"
+                        BorderBrush="#48FFFFFF"
+                        BorderThickness="0.9"
+                        Cursor="Hand"
+                        FocusVisualStyle="{x:Null}"
+                        ToolTip="点击切换排序规则（拖拽自动重排，Ctrl+拖拽合并文件夹）"
+                        Click="OnCycleSortModeClick">
+                    <Button.Template>
+                        <ControlTemplate TargetType="Button">
+                            <Border Background="{TemplateBinding Background}" BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}" CornerRadius="16" Padding="{TemplateBinding Padding}">
+                                <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                            </Border>
+                        </ControlTemplate>
+                    </Button.Template>
+                    <TextBlock x:Name="SortModeLabel" Text="排序: 自定义" />
+                </Button>
             </StackPanel>
 
             <!-- Authentic macOS 7x5 floating icon grid -->

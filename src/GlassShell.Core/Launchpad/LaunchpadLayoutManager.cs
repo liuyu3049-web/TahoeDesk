@@ -8,8 +8,8 @@ using GlassShell.Core.Search;
 namespace GlassShell.Core.Launchpad;
 
 /// <summary>
-/// Manages Launchpad's 7x5 paginated app grid, smart primary-app filtering (hiding utility/config/license tools),
-/// user right-click hide/restore, folder grouping, search filtering, and JSON persistence.
+/// Manages Launchpad's 7x5 paginated app grid, smart primary-app filtering, sorting rules,
+/// individual item locking, direct drag-to-reorder auto-flow, folder grouping, and JSON persistence.
 /// </summary>
 public sealed class LaunchpadLayoutManager
 {
@@ -19,12 +19,14 @@ public sealed class LaunchpadLayoutManager
 
     private static readonly string[] AuxiliaryKeywords =
     [
-        "配置工具", "许可", "许可证", "授权", "激活工具", "诊断", "修复工具", "修复", "更新程序", "升级工具",
-        "安装向导", "命令行", "开发者命令", "说明文档", "使用手册", "帮助文档", "驱动程序", "卸载",
-        "license", "licensing", "config tool", "configuration", "configure", "updater", "auto update",
-        "installer", "setup wizard", "repair", "diagnostic", "diagnostics", "native tools",
-        "developer command", "developer powershell", "command prompt for", "profiler", "benchmark",
-        "maintenance", "migration", "uninstall", "readme", "manual", "documentation"
+        "发行说明", "更新日志", "知识融合", "配置工具", "配置", "许可", "许可证", "授权", "激活", "诊断",
+        "修复", "更新程序", "升级工具", "安装向导", "命令行", "开发者命令", "说明文档", "使用手册", "帮助",
+        "驱动程序", "卸载", "指南", "教程", "向导", "管理工具", "控制台", "监控", "日志", "示例", "反馈", "支持",
+        "release notes", "changelog", "license", "licensing", "config", "configure", "updater", "auto update",
+        "installer", "setup", "repair", "diagnostic", "native tools", "developer", "command prompt",
+        "powershell for", "profiler", "benchmark", "maintenance", "migration", "uninstall", "readme",
+        "read me", "manual", "documentation", "tutorial", "guide", "support", "feedback", "wizard",
+        "helper", "agent", "daemon", "sdk", "toolkit", "utility", "ice"
     ];
 
     private sealed class PersistedState
@@ -32,21 +34,38 @@ public sealed class LaunchpadLayoutManager
         public List<LaunchpadEntry> Entries { get; set; } = [];
         public List<string> HiddenAppIds { get; set; } = [];
         public List<string> ForceShownAppIds { get; set; } = [];
+        public List<string> LockedAppIds { get; set; } = [];
+        public LaunchpadSortMode SortMode { get; set; } = LaunchpadSortMode.Custom;
     }
 
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
     private readonly List<LaunchpadEntry> _entries = [];
     private readonly HashSet<string> _hiddenIds = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _forceShownIds = new(StringComparer.OrdinalIgnoreCase);
+    private readonly HashSet<string> _lockedIds = new(StringComparer.OrdinalIgnoreCase);
 
     public IReadOnlyList<LaunchpadEntry> Entries => _entries;
     public IReadOnlyCollection<string> HiddenAppIds => _hiddenIds;
+    public IReadOnlyCollection<string> LockedAppIds => _lockedIds;
+    public LaunchpadSortMode SortMode { get; set; } = LaunchpadSortMode.Custom;
 
     public static bool IsAuxiliaryUtility(string title)
     {
         if (string.IsNullOrWhiteSpace(title)) return false;
         foreach (string kw in AuxiliaryKeywords)
         {
+            if (kw == "ice")
+            {
+                // Match standalone "ICE" token (e.g. "知识融合ICE", "ZeroC ICE") without matching "Office" or "Voice"!
+                if (title.Contains("知识融合", StringComparison.OrdinalIgnoreCase)
+                    || title.EndsWith("ICE", StringComparison.Ordinal)
+                    || title.Contains(" ICE", StringComparison.Ordinal))
+                {
+                    return true;
+                }
+                continue;
+            }
+
             if (title.Contains(kw, StringComparison.OrdinalIgnoreCase))
             {
                 return true;
@@ -55,13 +74,22 @@ public sealed class LaunchpadLayoutManager
         return false;
     }
 
-    public bool IsEntryHidden(LaunchpadEntry entry)
+    public bool IsLocked(string entryId) => !string.IsNullOrWhiteSpace(entryId) && _lockedIds.Contains(entryId);
+
+    public bool ToggleLock(string entryId)
     {
-        if (entry.IsFolder) return false;
-        return _hiddenIds.Contains(entry.Id);
+        if (string.IsNullOrWhiteSpace(entryId)) return false;
+        if (!_lockedIds.Add(entryId))
+        {
+            _lockedIds.Remove(entryId);
+            return false;
+        }
+        return true;
     }
 
-    public IReadOnlyList<LaunchpadEntry> GetEntriesForFilter(LaunchpadFilterMode mode)
+    public IReadOnlyList<LaunchpadEntry> GetEntriesForFilter(
+        LaunchpadFilterMode mode,
+        LaunchpadSortMode? sortOverride = null)
     {
         if (mode == LaunchpadFilterMode.Hidden)
         {
@@ -102,7 +130,30 @@ public sealed class LaunchpadLayoutManager
                 visible.Add(entry);
             }
         }
-        return visible;
+
+        var activeSort = sortOverride ?? SortMode;
+        if (activeSort == LaunchpadSortMode.Custom)
+        {
+            return visible;
+        }
+
+        // Respect locked items pinned at their exact current indices while sorting unlocked items smoothly around them!
+        var unlocked = visible.Where(e => !IsLocked(e.Id)).ToList();
+        unlocked = activeSort switch
+        {
+            LaunchpadSortMode.NameAsc => unlocked.OrderBy(e => e.Title, StringComparer.CurrentCultureIgnoreCase).ToList(),
+            LaunchpadSortMode.NameDesc => unlocked.OrderByDescending(e => e.Title, StringComparer.CurrentCultureIgnoreCase).ToList(),
+            LaunchpadSortMode.Pinyin => unlocked.OrderBy(e => string.IsNullOrEmpty(e.PinyinInitials) ? e.Title : e.PinyinInitials, StringComparer.OrdinalIgnoreCase).ThenBy(e => e.Title, StringComparer.CurrentCultureIgnoreCase).ToList(),
+            _ => unlocked
+        };
+
+        var result = new List<LaunchpadEntry>(visible.Count);
+        int uIdx = 0;
+        foreach (var entry in visible)
+        {
+            result.Add(IsLocked(entry.Id) ? entry : unlocked[uIdx++]);
+        }
+        return result;
     }
 
     private bool IsVisibleInMode(LaunchpadEntry entry, LaunchpadFilterMode mode)
@@ -235,6 +286,8 @@ public sealed class LaunchpadLayoutManager
     public bool Reorder(string sourceId, string targetId)
     {
         if (string.Equals(sourceId, targetId, StringComparison.OrdinalIgnoreCase)) return false;
+        if (IsLocked(sourceId)) return false;
+
         int srcIdx = _entries.FindIndex(e => string.Equals(e.Id, sourceId, StringComparison.OrdinalIgnoreCase));
         int dstIdx = _entries.FindIndex(e => string.Equals(e.Id, targetId, StringComparison.OrdinalIgnoreCase));
         if (srcIdx < 0 || dstIdx < 0) return false;
@@ -242,12 +295,15 @@ public sealed class LaunchpadLayoutManager
         var item = _entries[srcIdx];
         _entries.RemoveAt(srcIdx);
         _entries.Insert(dstIdx, item);
+        SortMode = LaunchpadSortMode.Custom;
         return true;
     }
 
     public bool MergeIntoFolder(string sourceId, string targetId, string defaultFolderName = "应用文件夹")
     {
         if (string.Equals(sourceId, targetId, StringComparison.OrdinalIgnoreCase)) return false;
+        if (IsLocked(sourceId)) return false;
+
         int srcIdx = _entries.FindIndex(e => string.Equals(e.Id, sourceId, StringComparison.OrdinalIgnoreCase));
         int dstIdx = _entries.FindIndex(e => string.Equals(e.Id, targetId, StringComparison.OrdinalIgnoreCase));
         if (srcIdx < 0 || dstIdx < 0) return false;
@@ -322,7 +378,9 @@ public sealed class LaunchpadLayoutManager
             {
                 Entries = _entries,
                 HiddenAppIds = _hiddenIds.ToList(),
-                ForceShownAppIds = _forceShownIds.ToList()
+                ForceShownAppIds = _forceShownIds.ToList(),
+                LockedAppIds = _lockedIds.ToList(),
+                SortMode = SortMode
             };
             File.WriteAllText(filePath, JsonSerializer.Serialize(state, JsonOptions));
         }
@@ -337,7 +395,6 @@ public sealed class LaunchpadLayoutManager
             string json = File.ReadAllText(filePath).TrimStart();
             if (json.StartsWith('['))
             {
-                // Backward compatibility with v1 array format
                 var legacy = JsonSerializer.Deserialize<List<LaunchpadEntry>>(json);
                 if (legacy is not null)
                 {
@@ -356,6 +413,9 @@ public sealed class LaunchpadLayoutManager
                 foreach (var id in state.HiddenAppIds) _hiddenIds.Add(id);
                 _forceShownIds.Clear();
                 foreach (var id in state.ForceShownAppIds) _forceShownIds.Add(id);
+                _lockedIds.Clear();
+                foreach (var id in state.LockedAppIds) _lockedIds.Add(id);
+                SortMode = state.SortMode;
             }
         }
         catch { }

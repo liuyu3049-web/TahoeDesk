@@ -1,94 +1,162 @@
 using System;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Windows;
-using System.Windows.Controls;
 using System.Windows.Interop;
 using System.Windows.Media;
-using System.Windows.Media.Animation;
 using System.Windows.Media.Imaging;
+using GlassShell.Core.DockPhysics;
 using GlassShell.UI.Glass;
 
 namespace GlassShell.UI.Dock;
 
 /// <summary>
-/// Zero-injection macOS-style Scale-into-Dock & Scale-from-Dock visual transition overlay.
-/// Renders a click-through transient snapshot that smoothly shrinks into (or expands from) the exact Dock icon.
+/// Zero-injection 120fps macOS Genie Effect (神奇效果) visual transition overlay.
+/// Renders 28 horizontal CroppedBitmap slices smoothly curving along an S-shaped funnel into/out of the exact Dock icon.
 /// </summary>
 public static class WindowDockAnimator
 {
     private const int GWL_EXSTYLE = -20;
     private const int WS_EX_TRANSPARENT = 0x00000020;
 
+    private sealed class GenieCanvasElement : FrameworkElement
+    {
+        private const int SliceCount = 28;
+        private readonly CroppedBitmap[]? _slices;
+        private readonly Brush _fallbackBrush;
+        private readonly Rect _localWinRect;
+        private readonly Point _localDockCenter;
+        private readonly bool _isRestore;
+        private readonly double _durationSec;
+        private readonly Stopwatch _sw = Stopwatch.StartNew();
+        private readonly Action _onCompleted;
+        private double _progress;
+
+        public GenieCanvasElement(
+            BitmapSource? snapshot,
+            Rect localWinRect,
+            Point localDockCenter,
+            bool isRestore,
+            Action onCompleted)
+        {
+            _localWinRect = localWinRect;
+            _localDockCenter = localDockCenter;
+            _isRestore = isRestore;
+            _durationSec = isRestore ? 0.27 : 0.30;
+            _onCompleted = onCompleted;
+            _progress = isRestore ? 1.0 : 0.0;
+            IsHitTestVisible = false;
+
+            var fb = new SolidColorBrush(Color.FromArgb(0xCC, 0x24, 0x2A, 0x3A));
+            fb.Freeze();
+            _fallbackBrush = fb;
+
+            if (snapshot is not null && snapshot.PixelWidth >= 8 && snapshot.PixelHeight >= SliceCount)
+            {
+                _slices = new CroppedBitmap[SliceCount];
+                int pw = snapshot.PixelWidth;
+                int ph = snapshot.PixelHeight;
+                for (int i = 0; i < SliceCount; i++)
+                {
+                    int y0 = (int)Math.Floor((double)i * ph / SliceCount);
+                    int y1 = (int)Math.Ceiling((double)(i + 1) * ph / SliceCount);
+                    int sh = Math.Max(1, Math.Min(ph - y0, y1 - y0));
+                    var cb = new CroppedBitmap(snapshot, new Int32Rect(0, y0, pw, sh));
+                    cb.Freeze();
+                    _slices[i] = cb;
+                }
+            }
+
+            RenderOptions.SetBitmapScalingMode(this, BitmapScalingMode.Linear);
+            Loaded += (_, _) => CompositionTarget.Rendering += OnFrame;
+            Unloaded += (_, _) => CompositionTarget.Rendering -= OnFrame;
+        }
+
+        private void OnFrame(object? sender, EventArgs e)
+        {
+            double raw = Math.Clamp(_sw.Elapsed.TotalSeconds / _durationSec, 0.0, 1.0);
+            _progress = _isRestore ? (1.0 - raw) : raw;
+            InvalidateVisual();
+
+            if (raw >= 1.0)
+            {
+                CompositionTarget.Rendering -= OnFrame;
+                _onCompleted();
+            }
+        }
+
+        protected override void OnRender(DrawingContext dc)
+        {
+            var slices = GenieMeshCalculator.ComputeSlices(
+                _localWinRect.Left,
+                _localWinRect.Top,
+                _localWinRect.Width,
+                _localWinRect.Height,
+                _localDockCenter.X,
+                _localDockCenter.Y,
+                _progress,
+                SliceCount,
+                dockMouthWidth: 36.0);
+
+            double opacity = _isRestore
+                ? Math.Clamp(1.0 - Math.Pow(1.0 - _progress, 4.0) * 0.15, 0.25, 0.96)
+                : Math.Clamp(1.0 - Math.Pow(_progress, 4.5), 0.0, 0.96);
+
+            dc.PushOpacity(opacity);
+            for (int i = 0; i < slices.Count; i++)
+            {
+                var s = slices[i];
+                var rect = new Rect(s.Left, s.Top, s.Width, s.Height);
+                if (_slices is not null)
+                {
+                    dc.DrawImage(_slices[i], rect);
+                }
+                else
+                {
+                    dc.DrawRectangle(_fallbackBrush, null, rect);
+                }
+            }
+            dc.Pop();
+        }
+    }
+
     public static void PlayMinimizeToDock(BitmapSource? snapshot, Rect windowRectDip, Point dockIconCenterDip)
     {
         if (windowRectDip.Width < 40 || windowRectDip.Height < 40) return;
-        PlayScaleTransition(snapshot, windowRectDip, dockIconCenterDip, isRestore: false);
+        PlayGenieTransition(snapshot, windowRectDip, dockIconCenterDip, isRestore: false);
     }
 
     public static void PlayRestoreFromDock(BitmapSource? snapshot, Point dockIconCenterDip, Rect targetWindowRectDip)
     {
         if (targetWindowRectDip.Width < 40 || targetWindowRectDip.Height < 40) return;
-        PlayScaleTransition(snapshot, targetWindowRectDip, dockIconCenterDip, isRestore: true);
+        PlayGenieTransition(snapshot, targetWindowRectDip, dockIconCenterDip, isRestore: true);
     }
 
-    private static void PlayScaleTransition(BitmapSource? snapshot, Rect fullRectDip, Point dockCenterDip, bool isRestore)
+    private static void PlayGenieTransition(BitmapSource? snapshot, Rect fullRectDip, Point dockCenterDip, bool isRestore)
     {
-        double minX = Math.Min(fullRectDip.Left, dockCenterDip.X - 36);
-        double minY = Math.Min(fullRectDip.Top, dockCenterDip.Y - 36);
-        double maxX = Math.Max(fullRectDip.Right, dockCenterDip.X + 36);
-        double maxY = Math.Max(fullRectDip.Bottom, dockCenterDip.Y + 36);
+        double minX = Math.Min(fullRectDip.Left, dockCenterDip.X - 40);
+        double minY = Math.Min(fullRectDip.Top, dockCenterDip.Y - 40);
+        double maxX = Math.Max(fullRectDip.Right, dockCenterDip.X + 40);
+        double maxY = Math.Max(fullRectDip.Bottom, dockCenterDip.Y + 24);
 
         double boundsW = Math.Max(64, maxX - minX);
         double boundsH = Math.Max(64, maxY - minY);
 
-        var scale = new ScaleTransform(isRestore ? 0.08 : 1.0, isRestore ? 0.08 : 1.0);
-        var translate = new TranslateTransform();
-        var group = new TransformGroup();
-        group.Children.Add(scale);
-        group.Children.Add(translate);
+        var localWin = new Rect(fullRectDip.Left - minX, fullRectDip.Top - minY, fullRectDip.Width, fullRectDip.Height);
+        var localDock = new Point(dockCenterDip.X - minX, dockCenterDip.Y - minY);
 
-        UIElement cardContent = snapshot is not null
-            ? new Image
+        Window? overlay = null;
+        var genieElement = new GenieCanvasElement(
+            snapshot,
+            localWin,
+            localDock,
+            isRestore,
+            onCompleted: () =>
             {
-                Source = snapshot,
-                Stretch = Stretch.Fill
-            }
-            : new Border
-            {
-                Background = new SolidColorBrush(Color.FromArgb(0xA8, 0x26, 0x2C, 0x3D))
-            };
+                try { overlay?.Close(); } catch { }
+            });
 
-        if (cardContent is Image img)
-        {
-            RenderOptions.SetBitmapScalingMode(img, BitmapScalingMode.Linear);
-        }
-
-        var card = new Border
-        {
-            Width = fullRectDip.Width,
-            Height = fullRectDip.Height,
-            CornerRadius = new CornerRadius(12),
-            BorderBrush = new SolidColorBrush(Color.FromArgb(0x66, 0xFF, 0xFF, 0xFF)),
-            BorderThickness = new Thickness(1),
-            ClipToBounds = true,
-            RenderTransformOrigin = new Point(0.5, 0.5),
-            RenderTransform = group,
-            Opacity = isRestore ? 0.25 : 0.94,
-            Child = cardContent
-        };
-
-        double startX = fullRectDip.Left - minX;
-        double startY = fullRectDip.Top - minY;
-        double endX = (dockCenterDip.X - minX) - fullRectDip.Width * 0.5;
-        double endY = (dockCenterDip.Y - minY) - fullRectDip.Height * 0.5;
-
-        translate.X = isRestore ? endX : startX;
-        translate.Y = isRestore ? endY : startY;
-
-        var canvas = new Canvas { Background = Brushes.Transparent, IsHitTestVisible = false };
-        canvas.Children.Add(card);
-
-        var overlay = new Window
+        overlay = new Window
         {
             Left = minX,
             Top = minY,
@@ -102,7 +170,7 @@ public static class WindowDockAnimator
             ShowActivated = false,
             Topmost = true,
             IsHitTestVisible = false,
-            Content = canvas
+            Content = genieElement
         };
 
         overlay.SourceInitialized += (_, _) =>
@@ -111,33 +179,6 @@ public static class WindowDockAnimator
             WindowInteropHelperEx.ApplyShellOverlayStyles(hwnd);
             int ex = GetWindowLongW(hwnd, GWL_EXSTYLE);
             SetWindowLongW(hwnd, GWL_EXSTYLE, ex | WS_EX_TRANSPARENT);
-        };
-
-        overlay.Loaded += (_, _) =>
-        {
-            var dur = TimeSpan.FromMilliseconds(isRestore ? 200 : 230);
-            IEasingFunction ease = isRestore
-                ? new CubicEase { EasingMode = EasingMode.EaseOut }
-                : new PowerEase { Power = 2.2, EasingMode = EasingMode.EaseInOut };
-
-            var animScale = new DoubleAnimation(isRestore ? 0.08 : 1.0, isRestore ? 1.0 : 0.08, dur) { EasingFunction = ease };
-            var animX = new DoubleAnimation(isRestore ? endX : startX, isRestore ? startX : endX, dur) { EasingFunction = ease };
-            var animY = new DoubleAnimation(isRestore ? endY : startY, isRestore ? startY : endY, dur) { EasingFunction = ease };
-            var animOpacity = new DoubleAnimation(isRestore ? 0.35 : 0.94, isRestore ? 0.0 : 0.0, dur)
-            {
-                EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseIn }
-            };
-
-            animScale.Completed += (_, _) =>
-            {
-                try { overlay.Close(); } catch { }
-            };
-
-            scale.BeginAnimation(ScaleTransform.ScaleXProperty, animScale);
-            scale.BeginAnimation(ScaleTransform.ScaleYProperty, animScale);
-            translate.BeginAnimation(TranslateTransform.XProperty, animX);
-            translate.BeginAnimation(TranslateTransform.YProperty, animY);
-            card.BeginAnimation(UIElement.OpacityProperty, animOpacity);
         };
 
         try
@@ -167,7 +208,7 @@ public static class WindowDockAnimator
             return false;
         }
 
-        if (GetWindowRect(hwnd, out RECT rc))
+        if (GetWindowRect(hwnd, out RECT rc) && rc.Left > -10000)
         {
             rectDip = new Rect(
                 rc.Left / dpiScale,
