@@ -1,4 +1,6 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading.Tasks;
@@ -7,11 +9,16 @@ using Windows.Devices.Radios;
 namespace GlassShell.Core.SystemControl;
 
 /// <summary>
-/// WinRT Radio + Native Wifi (wlanapi.dll) controller for Wi-Fi SSID/power and Bluetooth power.
+/// WinRT Radio + Native Wifi (wlanapi.dll) controller for Wi-Fi SSID/list/direct-connect and Bluetooth power.
 /// </summary>
 public sealed class RadioControlService
 {
     private const uint WlanIntfOpcodeCurrentConnection = 7;
+    private const uint WlanAvailableNetworkIncludeAllProfileTypes = 0x00000002;
+    private const uint WlanAvailableNetworkConnected = 0x00000001;
+    private const uint WlanAvailableNetworkHasProfile = 0x00000002;
+    private const int WlanConnectionModeProfile = 0;
+    private const int Dot11BssTypeAny = 3;
 
     public async Task<RadioState> GetStateAsync()
     {
@@ -48,6 +55,121 @@ public sealed class RadioControlService
 
     public Task<bool> SetWifiEnabledAsync(bool enabled) => SetRadioKindAsync(RadioKind.WiFi, enabled);
     public Task<bool> SetBluetoothEnabledAsync(bool enabled) => SetRadioKindAsync(RadioKind.Bluetooth, enabled);
+
+    public IReadOnlyList<WifiNetworkInfo> GetAvailableWifiNetworks()
+    {
+        nint clientHandle = 0;
+        nint ifaceListPtr = 0;
+        nint netListPtr = 0;
+        try
+        {
+            if (WlanOpenHandle(2, 0, out _, out clientHandle) != 0) return [];
+            if (WlanEnumInterfaces(clientHandle, 0, out ifaceListPtr) != 0 || ifaceListPtr == 0) return [];
+
+            int ifaceCount = Marshal.ReadInt32(ifaceListPtr, 0);
+            if (ifaceCount <= 0) return [];
+
+            var guidBytes = new byte[16];
+            Marshal.Copy(ifaceListPtr + 8, guidBytes, 0, 16);
+            var ifaceGuid = new Guid(guidBytes);
+
+            if (WlanGetAvailableNetworkList(clientHandle, ref ifaceGuid, WlanAvailableNetworkIncludeAllProfileTypes, 0, out netListPtr) != 0
+                || netListPtr == 0)
+            {
+                return [];
+            }
+
+            int count = Marshal.ReadInt32(netListPtr, 0);
+            var bySsid = new Dictionary<string, WifiNetworkInfo>(StringComparer.OrdinalIgnoreCase);
+
+            // WLAN_AVAILABLE_NETWORK is 628 bytes each, starting at offset 8 of WLAN_AVAILABLE_NETWORK_LIST
+            const int entrySize = 628;
+            for (int i = 0; i < count; i++)
+            {
+                nint entryPtr = netListPtr + 8 + i * entrySize;
+                int ssidLen = Marshal.ReadInt32(entryPtr, 512);
+                if (ssidLen <= 0 || ssidLen > 32) continue;
+
+                byte[] ssidBytes = new byte[ssidLen];
+                Marshal.Copy(entryPtr + 516, ssidBytes, 0, ssidLen);
+                string ssid = Encoding.UTF8.GetString(ssidBytes).Trim();
+                if (string.IsNullOrWhiteSpace(ssid)) continue;
+
+                string profile = (Marshal.PtrToStringUni(entryPtr, 256) ?? string.Empty).Split('\0')[0].Trim();
+                int signal = Math.Clamp(Marshal.ReadInt32(entryPtr, 604), 0, 100);
+                bool secured = Marshal.ReadInt32(entryPtr, 608) != 0;
+                uint flags = unchecked((uint)Marshal.ReadInt32(entryPtr, 620));
+                bool connected = (flags & WlanAvailableNetworkConnected) != 0;
+                bool hasProfile = (flags & WlanAvailableNetworkHasProfile) != 0 && !string.IsNullOrEmpty(profile);
+
+                var info = new WifiNetworkInfo(ssid, hasProfile ? profile : null, signal, connected, secured, hasProfile);
+                if (!bySsid.TryGetValue(ssid, out var existing)
+                    || info.IsConnected
+                    || (!existing.IsConnected && info.HasSavedProfile && !existing.HasSavedProfile)
+                    || (!existing.IsConnected && info.HasSavedProfile == existing.HasSavedProfile && info.SignalQuality > existing.SignalQuality))
+                {
+                    bySsid[ssid] = info;
+                }
+            }
+
+            return bySsid.Values
+                .OrderByDescending(n => n.IsConnected)
+                .ThenByDescending(n => n.HasSavedProfile)
+                .ThenByDescending(n => n.SignalQuality)
+                .Take(10)
+                .ToList();
+        }
+        catch
+        {
+            return [];
+        }
+        finally
+        {
+            if (netListPtr != 0) WlanFreeMemory(netListPtr);
+            if (ifaceListPtr != 0) WlanFreeMemory(ifaceListPtr);
+            if (clientHandle != 0) WlanCloseHandle(clientHandle, 0);
+        }
+    }
+
+    public bool ConnectToSavedWifiProfile(string profileName)
+    {
+        if (string.IsNullOrWhiteSpace(profileName)) return false;
+        nint clientHandle = 0;
+        nint ifaceListPtr = 0;
+        try
+        {
+            if (WlanOpenHandle(2, 0, out _, out clientHandle) != 0) return false;
+            if (WlanEnumInterfaces(clientHandle, 0, out ifaceListPtr) != 0 || ifaceListPtr == 0) return false;
+
+            int ifaceCount = Marshal.ReadInt32(ifaceListPtr, 0);
+            if (ifaceCount <= 0) return false;
+
+            var guidBytes = new byte[16];
+            Marshal.Copy(ifaceListPtr + 8, guidBytes, 0, 16);
+            var ifaceGuid = new Guid(guidBytes);
+
+            var connParams = new WLAN_CONNECTION_PARAMETERS
+            {
+                wlanConnectionMode = WlanConnectionModeProfile,
+                strProfile = profileName,
+                pDot11Ssid = IntPtr.Zero,
+                pDesiredBssidList = IntPtr.Zero,
+                dot11BssType = Dot11BssTypeAny,
+                dwFlags = 0
+            };
+
+            return WlanConnect(clientHandle, ref ifaceGuid, ref connParams, 0) == 0;
+        }
+        catch
+        {
+            return false;
+        }
+        finally
+        {
+            if (ifaceListPtr != 0) WlanFreeMemory(ifaceListPtr);
+            if (clientHandle != 0) WlanCloseHandle(clientHandle, 0);
+        }
+    }
 
     private static Windows.Devices.Radios.RadioState RadioStateKindToBool(Windows.Devices.Radios.RadioState _)
         => Windows.Devices.Radios.RadioState.On;
@@ -136,6 +258,24 @@ public sealed class RadioControlService
 
     [DllImport("wlanapi.dll")]
     private static extern uint WlanQueryInterface(nint hClientHandle, ref Guid pInterfaceGuid, uint opCode, nint pReserved, out int pdwDataSize, out nint ppData, out uint pWlanOpcodeValueType);
+
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    private struct WLAN_CONNECTION_PARAMETERS
+    {
+        public int wlanConnectionMode;
+        [MarshalAs(UnmanagedType.LPWStr)]
+        public string? strProfile;
+        public IntPtr pDot11Ssid;
+        public IntPtr pDesiredBssidList;
+        public int dot11BssType;
+        public uint dwFlags;
+    }
+
+    [DllImport("wlanapi.dll")]
+    private static extern uint WlanGetAvailableNetworkList(nint hClientHandle, ref Guid pInterfaceGuid, uint dwFlags, nint pReserved, out nint ppAvailableNetworkList);
+
+    [DllImport("wlanapi.dll")]
+    private static extern uint WlanConnect(nint hClientHandle, ref Guid pInterfaceGuid, ref WLAN_CONNECTION_PARAMETERS pConnectionParameters, nint pReserved);
 
     [DllImport("wlanapi.dll")]
     private static extern void WlanFreeMemory(nint pMemory);

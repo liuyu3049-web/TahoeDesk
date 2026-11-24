@@ -54,6 +54,7 @@
                              FontSize="17"
                              FontFamily="Microsoft YaHei UI, Segoe UI"
                              VerticalContentAlignment="Center"
+                             PreviewKeyDown="OnWindowPreviewKeyDown"
                              TextChanged="OnQueryTextChanged" />
                 </Grid>
             </DockPanel>

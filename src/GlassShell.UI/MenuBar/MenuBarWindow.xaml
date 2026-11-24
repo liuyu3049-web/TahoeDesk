@@ -101,7 +101,11 @@
                     </StackPanel>
                 </Button>
 
-                <Button Style="{StaticResource MenuBarButtonStyle}" Padding="6,0" ToolTip="网络状态">
+                <Button x:Name="WifiBarButton"
+                        Style="{StaticResource MenuBarButtonStyle}"
+                        Padding="6,0"
+                        ToolTip="Wi-Fi 网络"
+                        Click="OnWifiBarClick">
                     <Path Data="M1,6 A11,11 0 0 1 15,6 M3.5,8.5 A7.5,7.5 0 0 1 12.5,8.5 M6,11 A4,4 0 0 1 10,11 M8,13.5 A0.8,0.8 0 1 1 8,13.49"
                           Stroke="{DynamicResource MenuBarForegroundBrush}"
                           StrokeThickness="1.5"

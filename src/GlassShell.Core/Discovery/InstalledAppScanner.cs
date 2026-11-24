@@ -28,7 +28,9 @@ public static class InstalledAppScanner
         string[] roots =
         [
             Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.CommonStartMenu), "Programs"),
-            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.StartMenu), "Programs")
+            Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.StartMenu), "Programs"),
+            Environment.GetFolderPath(Environment.SpecialFolder.CommonDesktopDirectory),
+            Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory)
         ];
 
         foreach (string root in roots)
@@ -80,11 +82,11 @@ public static class InstalledAppScanner
         }
 
         // Ensure core Windows apps are always present even if omitted from classic Start Menu folders
-        AddBuiltInIfMissing(results, seenNames, "文件资源管理器", @"C:\Windows\explorer.exe");
-        AddBuiltInIfMissing(results, seenNames, "记事本", @"C:\Windows\System32\notepad.exe");
-        AddBuiltInIfMissing(results, seenNames, "计算器", @"C:\Windows\System32\calc.exe");
-        AddBuiltInIfMissing(results, seenNames, "画图", @"C:\Windows\System32\mspaint.exe");
-        AddBuiltInIfMissing(results, seenNames, "命令提示符", @"C:\Windows\System32\cmd.exe");
+        AddBuiltInIfMissing(results, seenTargets, seenNames, "文件资源管理器", @"C:\Windows\explorer.exe");
+        AddBuiltInIfMissing(results, seenTargets, seenNames, "记事本", @"C:\Windows\System32\notepad.exe");
+        AddBuiltInIfMissing(results, seenTargets, seenNames, "计算器", @"C:\Windows\System32\calc.exe");
+        AddBuiltInIfMissing(results, seenTargets, seenNames, "画图", @"C:\Windows\System32\mspaint.exe");
+        AddBuiltInIfMissing(results, seenTargets, seenNames, "命令提示符", @"C:\Windows\System32\cmd.exe");
 
         return results.OrderBy(a => a.Name, StringComparer.CurrentCultureIgnoreCase).ToList();
     }
@@ -135,9 +137,15 @@ public static class InstalledAppScanner
         catch { }
     }
 
-    private static void AddBuiltInIfMissing(List<InstalledAppEntry> list, HashSet<string> seenNames, string name, string exePath)
+    private static void AddBuiltInIfMissing(
+        List<InstalledAppEntry> list,
+        HashSet<string> seenTargets,
+        HashSet<string> seenNames,
+        string name,
+        string exePath)
     {
-        if (!File.Exists(exePath) || !seenNames.Add(name)) return;
+        if (!File.Exists(exePath)) return;
+        if (!seenTargets.Add(exePath) || !seenNames.Add(name)) return;
         list.Add(new InstalledAppEntry(
             Id: $"app:{exePath.ToLowerInvariant()}",
             Name: name,

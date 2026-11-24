@@ -18,15 +18,17 @@
             <ScaleTransform x:Name="RootScale" ScaleX="0.96" ScaleY="0.96" />
         </Grid.RenderTransform>
 
-        <!-- Fullscreen DXGI blurred desktop backdrop + refined macOS dark veil -->
-        <glass:LiquidGlassSurface x:Name="FullscreenGlass"
-                                  IsClippedBackdrop="True"
-                                  OpacityPreset="Frosted"
-                                  IsDarkMode="True"
-                                  IsHitTestVisible="False" />
+        <!-- Fast hardware-composited fullscreen dark glass veil (avoids 2560x1440 D3DImage CPU readback stalls!) -->
         <Border x:Name="VeilBackdrop"
-                Background="#7A0B101C"
-                MouseLeftButtonDown="OnBackgroundClick" />
+                MouseLeftButtonDown="OnBackgroundClick">
+            <Border.Background>
+                <LinearGradientBrush StartPoint="0,0" EndPoint="0.4,1">
+                    <GradientStop Color="#CC121726" Offset="0.0" />
+                    <GradientStop Color="#D60D111D" Offset="0.5" />
+                    <GradientStop Color="#CC151B2C" Offset="1.0" />
+                </LinearGradientBrush>
+            </Border.Background>
+        </Border>
 
         <!-- Main Launchpad layout -->
         <Grid Margin="72,46,72,38">

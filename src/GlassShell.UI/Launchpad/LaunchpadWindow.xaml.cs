@@ -35,7 +35,7 @@ public partial class LaunchpadWindow : Window
     public LaunchpadWindow(DxgiBackdropSampler sampler)
     {
         InitializeComponent();
-        FullscreenGlass.AttachSampler(sampler);
+        _ = sampler;
 
         _layoutPath = System.IO.Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -47,6 +47,7 @@ public partial class LaunchpadWindow : Window
         {
             var hwnd = new WindowInteropHelper(this).Handle;
             WindowInteropHelperEx.ExcludeFromCapture(hwnd);
+            ApplyAcrylicBackdrop(hwnd);
         };
     }
 
@@ -445,6 +446,67 @@ public partial class LaunchpadWindow : Window
 
     private static void LaunchApp(string target)
     {
-        try { Process.Start(new ProcessStartInfo(target) { UseShellExecute = true }); } catch { }
+        try
+        {
+            string? workDir = System.IO.Path.GetDirectoryName(target);
+            Process.Start(new ProcessStartInfo(target)
+            {
+                UseShellExecute = true,
+                WorkingDirectory = !string.IsNullOrWhiteSpace(workDir) && Directory.Exists(workDir) ? workDir : string.Empty
+            });
+        }
+        catch { }
     }
+
+    private static void ApplyAcrylicBackdrop(nint hwnd)
+    {
+        if (hwnd == 0) return;
+        try
+        {
+            var accent = new AccentPolicy
+            {
+                AccentState = 3, // ACCENT_ENABLE_BLURBEHIND (hardware DWM blur, 0 CPU readback!)
+                AccentFlags = 2,
+                GradientColor = unchecked((int)0x99121622)
+            };
+            int size = System.Runtime.InteropServices.Marshal.SizeOf<AccentPolicy>();
+            nint ptr = System.Runtime.InteropServices.Marshal.AllocHGlobal(size);
+            try
+            {
+                System.Runtime.InteropServices.Marshal.StructureToPtr(accent, ptr, false);
+                var data = new WindowCompositionAttributeData
+                {
+                    Attribute = 19, // WCA_ACCENT_POLICY
+                    Data = ptr,
+                    SizeOfData = size
+                };
+                SetWindowCompositionAttribute(hwnd, ref data);
+            }
+            finally
+            {
+                System.Runtime.InteropServices.Marshal.FreeHGlobal(ptr);
+            }
+        }
+        catch { }
+    }
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    private struct AccentPolicy
+    {
+        public int AccentState;
+        public int AccentFlags;
+        public int GradientColor;
+        public int AnimationId;
+    }
+
+    [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+    private struct WindowCompositionAttributeData
+    {
+        public int Attribute;
+        public nint Data;
+        public int SizeOfData;
+    }
+
+    [System.Runtime.InteropServices.DllImport("user32.dll")]
+    private static extern int SetWindowCompositionAttribute(nint hwnd, ref WindowCompositionAttributeData data);
 }

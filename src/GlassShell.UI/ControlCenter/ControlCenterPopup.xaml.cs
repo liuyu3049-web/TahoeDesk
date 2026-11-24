@@ -2,9 +2,12 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
+using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
+using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -27,6 +30,9 @@ public partial class ControlCenterPopup : Popup
     private ThemeMode _currentTheme = ThemeMode.System;
     private RadioState _radioState = RadioState.Unavailable;
     private bool _suppressSliderEvents;
+    private bool _wifiDrawerExpanded;
+    private int _pendingBrightness = -1;
+    private int _brightnessWorkerActive;
 
     public ControlCenterPopup()
     {
@@ -41,7 +47,22 @@ public partial class ControlCenterPopup : Popup
             _dismissHook.Start();
             _ = RefreshLiveStateAsync();
         };
-        Closed += (_, _) => _dismissHook.Stop();
+        Closed += (_, _) =>
+        {
+            _dismissHook.Stop();
+            _wifiDrawerExpanded = false;
+            WifiDrawerCard.Visibility = Visibility.Collapsed;
+        };
+    }
+
+    public void SetWifiDrawerExpanded(bool expanded)
+    {
+        _wifiDrawerExpanded = expanded;
+        WifiDrawerCard.Visibility = expanded ? Visibility.Visible : Visibility.Collapsed;
+        if (expanded && IsOpen)
+        {
+            _ = RefreshWifiListAsync();
+        }
     }
 
     public nint OwnerAnchorHwnd { get; set; }
@@ -114,6 +135,95 @@ public partial class ControlCenterPopup : Popup
         _radioState = radioTask.Result;
         ApplyRadioUi(_radioState);
         ApplyMediaUi(mediaTask.Result);
+
+        if (_wifiDrawerExpanded)
+        {
+            await RefreshWifiListAsync();
+        }
+    }
+
+    private async Task RefreshWifiListAsync()
+    {
+        var networks = await Task.Run(() => _radio.GetAvailableWifiNetworks());
+        WifiNetworksList.Children.Clear();
+
+        var fgBrush = Resources["CcFgBrush"] as Brush ?? Brushes.White;
+        var subBrush = Resources["CcSubtleBrush"] as Brush ?? Brushes.Gray;
+        var hoverBrush = Resources["CcBtnBgBrush"] as Brush ?? Brushes.Transparent;
+
+        if (networks.Count == 0)
+        {
+            WifiNetworksList.Children.Add(new TextBlock
+            {
+                Text = _radioState.WifiOn ? "未扫描到可用 Wi-Fi，可点右上角打开系统网络" : "Wi-Fi 已关闭",
+                FontSize = 11,
+                FontFamily = new FontFamily("Microsoft YaHei UI, Segoe UI"),
+                Foreground = subBrush,
+                Margin = new Thickness(4, 6, 4, 6)
+            });
+            return;
+        }
+
+        foreach (var net in networks)
+        {
+            var dock = new DockPanel { LastChildFill = true };
+            var status = new TextBlock
+            {
+                Text = net.IsConnected ? "✓ 已连接" : (net.HasSavedProfile ? $"{net.SignalQuality}%" : "需密码"),
+                FontSize = 10.5,
+                FontFamily = new FontFamily("Microsoft YaHei UI, Segoe UI"),
+                Foreground = net.IsConnected ? new SolidColorBrush(Color.FromRgb(0x34, 0xC7, 0x59)) : subBrush,
+                VerticalAlignment = VerticalAlignment.Center,
+                Margin = new Thickness(6, 0, 0, 0)
+            };
+            DockPanel.SetDock(status, System.Windows.Controls.Dock.Right);
+            dock.Children.Add(status);
+
+            var title = new TextBlock
+            {
+                Text = net.Ssid,
+                FontSize = 12,
+                FontWeight = net.IsConnected ? FontWeights.SemiBold : FontWeights.Normal,
+                FontFamily = new FontFamily("Microsoft YaHei UI, Segoe UI"),
+                Foreground = fgBrush,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+                VerticalAlignment = VerticalAlignment.Center
+            };
+            dock.Children.Add(title);
+
+            var row = new Border
+            {
+                Padding = new Thickness(8, 6, 8, 6),
+                Margin = new Thickness(0, 1, 0, 1),
+                CornerRadius = new CornerRadius(7),
+                Background = Brushes.Transparent,
+                Cursor = Cursors.Hand,
+                Child = dock
+            };
+            row.MouseEnter += (_, _) => row.Background = hoverBrush;
+            row.MouseLeave += (_, _) => row.Background = Brushes.Transparent;
+            row.MouseLeftButtonUp += async (_, e) =>
+            {
+                e.Handled = true;
+                if (net.IsConnected) return;
+
+                if (net.HasSavedProfile && !string.IsNullOrWhiteSpace(net.ProfileName))
+                {
+                    status.Text = "连接中…";
+                    await Task.Run(() => _radio.ConnectToSavedWifiProfile(net.ProfileName));
+                    await Task.Delay(900);
+                    await RefreshLiveStateAsync();
+                }
+                else
+                {
+                    // Brand-new password-protected Wi-Fi -> open Windows compact quick network flyout
+                    IsOpen = false;
+                    LaunchUri("ms-availablenetworks:");
+                }
+            };
+
+            WifiNetworksList.Children.Add(row);
+        }
     }
 
     private void ApplyRadioUi(RadioState state)
@@ -190,8 +300,13 @@ public partial class ControlCenterPopup : Popup
 
     private void OnOpenWifiSettings(object sender, RoutedEventArgs e)
     {
+        SetWifiDrawerExpanded(!_wifiDrawerExpanded);
+    }
+
+    private void OnOpenAvailableNetworksFlyout(object sender, RoutedEventArgs e)
+    {
         IsOpen = false;
-        LaunchUri("ms-settings:network-wifi");
+        LaunchUri("ms-availablenetworks:");
     }
 
     private void OnOpenBluetoothSettings(object sender, RoutedEventArgs e)
@@ -229,7 +344,35 @@ public partial class ControlCenterPopup : Popup
         if (_suppressSliderEvents) return;
         int pct = (int)Math.Round(e.NewValue);
         BrightnessValueText.Text = $"{pct}%";
-        _brightness.TrySetBrightness(pct);
+
+        // Coalesce slow DDC/CI hardware I2C commands on a single background worker -> 120fps buttery slider!
+        Interlocked.Exchange(ref _pendingBrightness, pct);
+        if (Interlocked.CompareExchange(ref _brightnessWorkerActive, 1, 0) == 0)
+        {
+            _ = Task.Run(async () =>
+            {
+                try
+                {
+                    while (true)
+                    {
+                        int target = Interlocked.Exchange(ref _pendingBrightness, -1);
+                        if (target < 0) break;
+                        _brightness.TrySetBrightness(target);
+                        await Task.Delay(35);
+                    }
+                }
+                finally
+                {
+                    Interlocked.Exchange(ref _brightnessWorkerActive, 0);
+                    if (Volatile.Read(ref _pendingBrightness) >= 0 && Interlocked.CompareExchange(ref _brightnessWorkerActive, 1, 0) == 0)
+                    {
+                        int finalVal = Interlocked.Exchange(ref _pendingBrightness, -1);
+                        if (finalVal >= 0) _brightness.TrySetBrightness(finalVal);
+                        Interlocked.Exchange(ref _brightnessWorkerActive, 0);
+                    }
+                }
+            });
+        }
     }
 
     private void OnVolumeChanged(object sender, RoutedPropertyChangedEventArgs<double> e)

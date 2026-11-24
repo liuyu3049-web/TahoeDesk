@@ -221,6 +221,7 @@ public partial class SpotlightWindow : Window
             {
                 SpotlightResultKind.Calculator => "Enter 复制计算结果到剪贴板",
                 SpotlightResultKind.SystemCommand => "Enter 立即执行系统命令",
+                SpotlightResultKind.WebSearch => "Enter 使用默认浏览器搜索",
                 _ => "Enter 打开 · Ctrl+Enter 在资源管理器中显示"
             };
         }
@@ -228,6 +229,25 @@ public partial class SpotlightWindow : Window
 
     private UIElement BuildResultIcon(SpotlightResult item, double size)
     {
+        if (item.Kind == SpotlightResultKind.WebSearch)
+        {
+            return new Border
+            {
+                Width = size,
+                Height = size,
+                CornerRadius = new CornerRadius(size * 0.24),
+                Background = new LinearGradientBrush(Color.FromRgb(0x32, 0xAD, 0xE6), Color.FromRgb(0x0A, 0x84, 0xFF), 90),
+                Child = new TextBlock
+                {
+                    Text = "⌕",
+                    FontSize = size * 0.56,
+                    Foreground = Brushes.White,
+                    HorizontalAlignment = HorizontalAlignment.Center,
+                    VerticalAlignment = VerticalAlignment.Center
+                }
+            };
+        }
+
         if (item.Kind == SpotlightResultKind.Calculator)
         {
             return new Border
@@ -326,7 +346,7 @@ public partial class SpotlightWindow : Window
             UpdateSelectionVisuals();
             e.Handled = true;
         }
-        else if (e.Key == Key.Enter)
+        else if (e.Key is Key.Enter or Key.Return)
         {
             ExecuteSelected(revealInExplorer: (Keyboard.Modifiers & ModifierKeys.Control) != 0);
             e.Handled = true;
@@ -342,10 +362,18 @@ public partial class SpotlightWindow : Window
         switch (item.Kind)
         {
             case SpotlightResultKind.Calculator:
-                try { Clipboard.SetText(item.Payload); } catch { }
+                try { Clipboard.SetDataObject(item.Payload, true); } catch { }
                 return;
             case SpotlightResultKind.SystemCommand:
                 SystemCommandRequested?.Invoke(item.Payload);
+                return;
+            case SpotlightResultKind.WebSearch:
+                try
+                {
+                    string url = $"https://www.bing.com/search?q={Uri.EscapeDataString(item.Payload)}";
+                    Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+                }
+                catch { }
                 return;
             case SpotlightResultKind.Application:
             case SpotlightResultKind.File:
@@ -357,7 +385,12 @@ public partial class SpotlightWindow : Window
                     }
                     else
                     {
-                        Process.Start(new ProcessStartInfo(item.Payload) { UseShellExecute = true });
+                        string? workDir = System.IO.Path.GetDirectoryName(item.Payload);
+                        Process.Start(new ProcessStartInfo(item.Payload)
+                        {
+                            UseShellExecute = true,
+                            WorkingDirectory = !string.IsNullOrWhiteSpace(workDir) && Directory.Exists(workDir) ? workDir : string.Empty
+                        });
                     }
                 }
                 catch { }
@@ -371,6 +404,7 @@ public partial class SpotlightWindow : Window
         SpotlightResultKind.Application => "应用",
         SpotlightResultKind.SystemCommand => "命令",
         SpotlightResultKind.File => "文件",
+        SpotlightResultKind.WebSearch => "网页",
         _ => string.Empty
     };
 }

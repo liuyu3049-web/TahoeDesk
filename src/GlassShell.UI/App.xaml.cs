@@ -56,6 +56,9 @@ public partial class App : Application
     private string _lastForegroundTitle = string.Empty;
     private readonly LinkedList<string> _recentApps = new();
     private readonly List<string> _stableRunningOrder = [];
+    private readonly object _dockStateGate = new();
+    private DispatcherTimer? _dockDebounceTimer;
+    private int _dockRefreshInFlight;
     private bool _cleanedUp;
 
     protected override void OnStartup(StartupEventArgs e)
@@ -76,9 +79,14 @@ public partial class App : Application
             return;
         }
 
-        AppDomain.CurrentDomain.UnhandledException += (_, _) => CleanupSafe();
+        AppDomain.CurrentDomain.UnhandledException += (_, args) =>
+        {
+            LogCrash("AppDomain", args.ExceptionObject as Exception);
+            CleanupSafe();
+        };
         DispatcherUnhandledException += (_, args) =>
         {
+            LogCrash("Dispatcher", args.Exception);
             CleanupSafe();
             args.Handled = false;
         };
@@ -166,7 +174,7 @@ public partial class App : Application
         _windowTracker.TaskbarShownDetected += () => _taskbarController.HandleTaskbarShownEvent();
         _windowTracker.ForegroundChanged += OnForegroundChanged;
         _windowTracker.WindowMinimizing += OnWindowMinimizing;
-        _windowTracker.WindowsChanged += () => Dispatcher.InvokeAsync(RefreshDockItems);
+        _windowTracker.WindowsChanged += ScheduleDockRefresh;
 
         // Acquire taskbar suppression + primary top AppBar matching MenuBar height 1:1
         var primary = _shells.FirstOrDefault(s => s.Monitor.IsPrimary) ?? _shells[0];
@@ -194,15 +202,22 @@ public partial class App : Application
         });
         _trayProxyHost.Start();
 
-        RefreshDockItems();
+        _dockDebounceTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(180) };
+        _dockDebounceTimer.Tick += (_, _) =>
+        {
+            _dockDebounceTimer.Stop();
+            _ = RefreshDockItemsAsync();
+        };
+
+        _ = RefreshDockItemsAsync();
         OnForegroundChanged(_windowTracker.GetForegroundWindowInfo());
         _ = RefreshSearchAndLaunchpadIndexAsync();
 
-        _periodicRefreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
-        _periodicRefreshTimer.Tick += (_, _) => RefreshDockItems();
+        _periodicRefreshTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
+        _periodicRefreshTimer.Tick += (_, _) => _ = RefreshDockItemsAsync();
         _periodicRefreshTimer.Start();
 
-        _foregroundReconcileTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(250) };
+        _foregroundReconcileTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(350) };
         _foregroundReconcileTimer.Tick += (_, _) => ReconcileForegroundWindow();
         _foregroundReconcileTimer.Start();
 
@@ -274,41 +289,76 @@ public partial class App : Application
         }
     }
 
-    private void RefreshDockItems()
+    private void ScheduleDockRefresh()
     {
-        if (_windowTracker is null || _recycleBinService is null || _shells.Count == 0) return;
-
-        var windows = _windowTracker.GetTopLevelWindows();
-        var activeExes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var w in windows)
+        Dispatcher.BeginInvoke(() =>
         {
-            if (string.IsNullOrWhiteSpace(w.ExecutablePath)) continue;
-            activeExes.Add(w.ExecutablePath);
+            if (_dockDebounceTimer is null || _cleanedUp) return;
+            _dockDebounceTimer.Stop();
+            _dockDebounceTimer.Start();
+        });
+    }
 
-            if (!_stableRunningOrder.Any(p => string.Equals(p, w.ExecutablePath, StringComparison.OrdinalIgnoreCase)))
-            {
-                _stableRunningOrder.Add(w.ExecutablePath);
-            }
+    private void RefreshDockItems() => _ = RefreshDockItemsAsync();
 
-            if (!_recentApps.Any(p => string.Equals(p, w.ExecutablePath, StringComparison.OrdinalIgnoreCase)))
+    private async Task RefreshDockItemsAsync()
+    {
+        if (_windowTracker is null || _recycleBinService is null || _shells.Count == 0 || _cleanedUp) return;
+        if (Interlocked.CompareExchange(ref _dockRefreshInFlight, 1, 0) != 0) return;
+
+        var settingsSnapshot = _settings;
+        try
+        {
+            var items = await Task.Run(() =>
             {
-                _recentApps.AddFirst(w.ExecutablePath);
-                while (_recentApps.Count > 12) _recentApps.RemoveLast();
-            }
+                var windows = _windowTracker.GetTopLevelWindows();
+                List<string> recentCopy;
+                List<string> stableCopy;
+
+                lock (_dockStateGate)
+                {
+                    var activeExes = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                    foreach (var w in windows)
+                    {
+                        if (string.IsNullOrWhiteSpace(w.ExecutablePath)) continue;
+                        activeExes.Add(w.ExecutablePath);
+
+                        if (!_stableRunningOrder.Any(p => string.Equals(p, w.ExecutablePath, StringComparison.OrdinalIgnoreCase)))
+                        {
+                            _stableRunningOrder.Add(w.ExecutablePath);
+                        }
+
+                        if (!_recentApps.Any(p => string.Equals(p, w.ExecutablePath, StringComparison.OrdinalIgnoreCase)))
+                        {
+                            _recentApps.AddFirst(w.ExecutablePath);
+                            while (_recentApps.Count > 12) _recentApps.RemoveLast();
+                        }
+                    }
+
+                    _stableRunningOrder.RemoveAll(p => !activeExes.Contains(p));
+                    recentCopy = _recentApps.ToList();
+                    stableCopy = _stableRunningOrder.ToList();
+                }
+
+                if (settingsSnapshot.ShowMinimizedWindowsInDock)
+                {
+                    var minimizedHwnds = new HashSet<nint>(windows.Where(w => w.IsMinimized).Select(w => w.Hwnd));
+                    _snapshotCache.Prune(minimizedHwnds);
+                }
+
+                var rb = _recycleBinService.Query();
+                return DockModelCoordinator.BuildDockItems(settingsSnapshot, windows, recentCopy, rb, stableCopy);
+            });
+
+            await Dispatcher.InvokeAsync(() =>
+            {
+                foreach (var s in _shells) s.Dock.UpdateItems(items);
+            });
         }
-
-        // Remove apps from stable order only once all their windows have closed
-        _stableRunningOrder.RemoveAll(p => !activeExes.Contains(p));
-
-        // Prune snapshot cache for restored or closed windows
-        var minimizedHwnds = new HashSet<nint>(windows.Where(w => w.IsMinimized).Select(w => w.Hwnd));
-        _snapshotCache.Prune(minimizedHwnds);
-
-        var rb = _recycleBinService.Query();
-        var items = DockModelCoordinator.BuildDockItems(_settings, windows, _recentApps.ToList(), rb, _stableRunningOrder);
-        foreach (var s in _shells)
+        catch { }
+        finally
         {
-            s.Dock.UpdateItems(items);
+            Interlocked.Exchange(ref _dockRefreshInFlight, 0);
         }
     }
 
@@ -332,6 +382,7 @@ public partial class App : Application
 
     private void OnWindowMinimizing(nint hwnd)
     {
+        if (!_settings.ShowMinimizedWindowsInDock) return;
         var snap = WindowThumbnailCapturer.CaptureThumbnail(hwnd);
         if (snap is not null)
         {
@@ -343,9 +394,26 @@ public partial class App : Application
     {
         try
         {
-            var (apps, files) = await Task.Run(() => (
-                InstalledAppScanner.ScanInstalledApps(),
-                InstalledAppScanner.ScanLocalUserFiles(maxFiles: 300)));
+            var tcs = new TaskCompletionSource<(IReadOnlyList<InstalledAppEntry>, IReadOnlyList<IndexedFileEntry>)>();
+            // Dedicated STA thread so COM IShellLinkW resolves every .lnk shortcut reliably
+            var thread = new Thread(() =>
+            {
+                try
+                {
+                    var apps = InstalledAppScanner.ScanInstalledApps();
+                    var files = InstalledAppScanner.ScanLocalUserFiles(maxFiles: 300);
+                    tcs.TrySetResult((apps, files));
+                }
+                catch (Exception ex)
+                {
+                    tcs.TrySetException(ex);
+                }
+            });
+            thread.SetApartmentState(ApartmentState.STA);
+            thread.IsBackground = true;
+            thread.Start();
+
+            var (apps, files) = await tcs.Task;
 
             _cachedApps = apps;
             _cachedFiles = files;
@@ -355,6 +423,20 @@ public partial class App : Application
                 _spotlightWindow?.UpdateIndex(apps, files);
                 _launchpadWindow?.SyncApps(apps);
             });
+        }
+        catch (Exception ex)
+        {
+            LogCrash("IndexRefresh", ex);
+        }
+    }
+
+    private static void LogCrash(string source, Exception? ex)
+    {
+        try
+        {
+            string dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "GlassShell");
+            Directory.CreateDirectory(dir);
+            File.AppendAllText(Path.Combine(dir, "crash.log"), $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] [{source}] {ex}\r\n");
         }
         catch { }
     }
@@ -520,6 +602,7 @@ public partial class App : Application
         try { _periodicRefreshTimer?.Stop(); } catch { }
         try { _foregroundReconcileTimer?.Stop(); } catch { }
         try { _indexRefreshTimer?.Stop(); } catch { }
+        try { _dockDebounceTimer?.Stop(); } catch { }
         try { _winKeyHook?.Dispose(); } catch { }
         try { _hotkeyManager?.Dispose(); } catch { }
         try { _windowTracker?.Dispose(); } catch { }

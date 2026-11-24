@@ -64,21 +64,27 @@ public sealed class FolderStackAndSnapshotTests
     }
 
     [Fact]
-    public void DockModelCoordinator_PlacesMinimizedWindowsInRightStorageBeforeRecycleBin()
+    public void DockModelCoordinator_MinimizesIntoAppIconByDefaultAndSupportsOptionalTiles()
     {
-        var settings = GlassSettings.Default with { PinnedFolderPaths = [@"C:\Users\Demo\Downloads"] };
         var windows = new List<WindowInfo>
         {
             new(0x101, 10, @"C:\Windows\System32\notepad.exe", "记事本", "notes.txt - 记事本", "Notepad", IsMinimized: true, IsFlashing: false)
         };
 
-        var items = DockModelCoordinator.BuildDockItems(settings, windows, [], new RecycleBinStatus(true, 0, 0));
-        var right = items.Where(i => i.Section == DockSection.FoldersAndTrash).ToList();
+        // Default: minimized windows stay inside their app's Dock icon (no extra right-side tile clutter)
+        var defaultSettings = GlassSettings.Default with { PinnedFolderPaths = [@"C:\Users\Demo\Downloads"] };
+        var defaultRight = DockModelCoordinator.BuildDockItems(defaultSettings, windows, [], new RecycleBinStatus(true, 0, 0))
+            .Where(i => i.Section == DockSection.FoldersAndTrash).ToList();
+        Assert.Equal(2, defaultRight.Count);
+        Assert.Equal(DockItemKind.Folder, defaultRight[0].Kind);
+        Assert.Equal(DockItemKind.RecycleBin, defaultRight[1].Kind);
 
-        Assert.Equal(3, right.Count);
-        Assert.Equal(DockItemKind.Folder, right[0].Kind);
-        Assert.Equal(DockItemKind.MinimizedWindow, right[1].Kind);
-        Assert.Equal("notes.txt - 记事本", right[1].Title);
-        Assert.Equal(DockItemKind.RecycleBin, right[2].Kind);
+        // Optional tile mode when explicitly enabled
+        var optInSettings = defaultSettings with { ShowMinimizedWindowsInDock = true };
+        var optInRight = DockModelCoordinator.BuildDockItems(optInSettings, windows, [], new RecycleBinStatus(true, 0, 0))
+            .Where(i => i.Section == DockSection.FoldersAndTrash).ToList();
+        Assert.Equal(3, optInRight.Count);
+        Assert.Equal(DockItemKind.MinimizedWindow, optInRight[1].Kind);
+        Assert.Equal("notes.txt - 记事本", optInRight[1].Title);
     }
 }

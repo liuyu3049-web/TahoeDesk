@@ -90,4 +90,17 @@ public sealed class LaunchpadLayoutTests
             if (File.Exists(file)) File.Delete(file);
         }
     }
+
+    [Fact]
+    public void SyncWithInstalledApps_DeduplicatesDuplicateIdsWithoutThrowing()
+    {
+        var mgr = new LaunchpadLayoutManager();
+        mgr.SyncWithInstalledApps(
+        [
+            new("app:c:\\windows\\system32\\notepad.exe", "Notepad", @"C:\Windows\System32\notepad.exe", null, false, "n"),
+            new("app:c:\\windows\\system32\\notepad.exe", "记事本", @"C:\Windows\System32\notepad.exe", null, false, "jsb")
+        ]);
+
+        Assert.Single(mgr.Entries);
+    }
 }

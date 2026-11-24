@@ -5,7 +5,8 @@ public enum SpotlightResultKind
     Calculator,
     Application,
     SystemCommand,
-    File
+    File,
+    WebSearch
 }
 
 public sealed record InstalledAppEntry(

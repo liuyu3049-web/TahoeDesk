@@ -10,6 +10,14 @@ public sealed record AudioState(int VolumePercent, bool IsMuted, bool IsAvailabl
     public static AudioState Unavailable => new(0, false, false, []);
 }
 
+public sealed record WifiNetworkInfo(
+    string Ssid,
+    string? ProfileName,
+    int SignalQuality,
+    bool IsConnected,
+    bool IsSecured,
+    bool HasSavedProfile);
+
 public sealed record RadioState(
     bool HasWifi,
     bool WifiOn,

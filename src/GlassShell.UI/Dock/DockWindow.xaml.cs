@@ -37,6 +37,7 @@ public partial class DockWindow : Window
 
     private readonly MonitorContext _monitor;
     private readonly IconExtractor _iconExtractor = new();
+    private readonly Dictionary<string, BitmapSource?> _iconBitmapCache = new(StringComparer.OrdinalIgnoreCase);
     private readonly RecycleBinService _recycleBinService = new();
     private readonly SpringBounceAnimator _bounceAnimator = new();
     private readonly DockHoverAnimator _hoverAnimator = new();
@@ -324,14 +325,9 @@ public partial class DockWindow : Window
 
         if (!string.IsNullOrWhiteSpace(model.TargetPath))
         {
-            var raw = _iconExtractor.ExtractHighResIcon(model.TargetPath, 128);
-            if (raw is not null)
+            var bmp = GetOrExtractIconBitmap(model.TargetPath, 128);
+            if (bmp is not null)
             {
-                var bmp = BitmapSource.Create(
-                    raw.Width, raw.Height, 96, 96,
-                    PixelFormats.Bgra32, null, raw.BgraPixels, raw.Width * 4);
-                bmp.Freeze();
-
                 var img = new Image
                 {
                     Source = bmp,
@@ -348,6 +344,27 @@ public partial class DockWindow : Window
             Fill = new LinearGradientBrush(Color.FromRgb(0x5A, 0xC8, 0xFA), Color.FromRgb(0x0A, 0x84, 0xFF), 45),
             Margin = new Thickness(5)
         };
+    }
+
+    private BitmapSource? GetOrExtractIconBitmap(string path, int size)
+    {
+        string key = $"{size}|{path}";
+        if (_iconBitmapCache.TryGetValue(key, out var cached))
+        {
+            return cached;
+        }
+
+        BitmapSource? bmp = null;
+        var raw = _iconExtractor.ExtractHighResIcon(path, size);
+        if (raw is not null)
+        {
+            bmp = BitmapSource.Create(
+                raw.Width, raw.Height, 96, 96,
+                PixelFormats.Bgra32, null, raw.BgraPixels, raw.Width * 4);
+            bmp.Freeze();
+        }
+        _iconBitmapCache[key] = bmp;
+        return bmp;
     }
 
     private UIElement BuildMinimizedWindowVisual(DockItemModel model)

@@ -44,7 +44,7 @@
                                     Foreground="{DynamicResource CcSubtleBrush}"
                                     BorderThickness="0"
                                     Cursor="Hand"
-                                    ToolTip="打开 Windows Wi-Fi 设置"
+                                    ToolTip="展开/收起附近 Wi-Fi 列表"
                                     Click="OnOpenWifiSettings" />
                             <Button x:Name="WifiToggleBtn"
                                     Background="Transparent"
@@ -183,6 +183,34 @@
                     </Button>
                 </Grid>
             </Grid>
+
+            <!-- Inline Expandable Wi-Fi Network Picker (one-click connect for saved networks!) -->
+            <Border x:Name="WifiDrawerCard"
+                    Visibility="Collapsed"
+                    CornerRadius="14"
+                    Background="{DynamicResource CcCardBgBrush}"
+                    BorderBrush="{DynamicResource CcCardBorderBrush}"
+                    BorderThickness="0.8"
+                    Padding="11,9"
+                    Margin="0,0,0,10">
+                <StackPanel>
+                    <DockPanel Margin="2,0,2,6">
+                        <TextBlock Text="附近 Wi-Fi 网络" FontSize="11.5" FontWeight="SemiBold" FontFamily="Microsoft YaHei UI, Segoe UI" Foreground="{DynamicResource CcFgBrush}" VerticalAlignment="Center" />
+                        <Button DockPanel.Dock="Right"
+                                Content="系统网络 ›"
+                                FontSize="10.5"
+                                FontFamily="Microsoft YaHei UI, Segoe UI"
+                                Background="Transparent"
+                                Foreground="{DynamicResource CcSubtleBrush}"
+                                BorderThickness="0"
+                                Cursor="Hand"
+                                Click="OnOpenAvailableNetworksFlyout" />
+                    </DockPanel>
+                    <ScrollViewer MaxHeight="146" VerticalScrollBarVisibility="Auto">
+                        <StackPanel x:Name="WifiNetworksList" />
+                    </ScrollViewer>
+                </StackPanel>
+            </Border>
 
             <!-- Brightness Slider Card (auto-hidden when hardware unsupported) -->
             <Border x:Name="BrightnessCard"

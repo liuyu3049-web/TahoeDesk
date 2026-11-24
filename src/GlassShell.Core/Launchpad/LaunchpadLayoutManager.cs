@@ -35,7 +35,15 @@ public sealed class LaunchpadLayoutManager
 
     public void SyncWithInstalledApps(IReadOnlyList<InstalledAppEntry> installed)
     {
-        var byId = installed.ToDictionary(a => a.Id, StringComparer.OrdinalIgnoreCase);
+        var byId = new Dictionary<string, InstalledAppEntry>(StringComparer.OrdinalIgnoreCase);
+        foreach (var app in installed)
+        {
+            if (!string.IsNullOrWhiteSpace(app.Id))
+            {
+                byId.TryAdd(app.Id, app);
+            }
+        }
+
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var synced = new List<LaunchpadEntry>();
 

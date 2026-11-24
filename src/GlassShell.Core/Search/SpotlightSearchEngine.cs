@@ -103,11 +103,23 @@ public sealed class SpotlightSearchEngine
             }
         }
 
-        return results
+        var ranked = results
             .OrderByDescending(r => r.Score)
             .ThenBy(r => r.Title.Length)
-            .Take(maxResults)
+            .Take(Math.Max(1, maxResults - 1))
             .ToList();
+
+        // Always provide a browser search fallback so pressing Enter never silently does nothing
+        ranked.Add(new SpotlightResult(
+            SpotlightResultKind.WebSearch,
+            Id: "web:search",
+            Title: $"搜索 “{q}”",
+            Subtitle: "使用默认浏览器进行网页搜索",
+            Payload: q,
+            IconPath: null,
+            Score: 1));
+
+        return ranked;
     }
 
     public static int ScoreMatch(string query, string targetName, string secondaryKey)

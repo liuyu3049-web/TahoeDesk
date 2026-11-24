@@ -118,7 +118,7 @@ public sealed class WindowTracker : IWindowTracker
 
     private void OnWinEvent(nint hWinEventHook, uint eventType, nint hwnd, int idObject, int idChild, uint dwEventThread, uint dwmsEventTime)
     {
-        if (hwnd == 0 || idObject != 0) return;
+        if (hwnd == 0 || idObject != 0 || idChild != 0) return;
 
         if (eventType == EVENT_OBJECT_SHOW)
         {
@@ -144,6 +144,12 @@ public sealed class WindowTracker : IWindowTracker
             WindowsChanged?.Invoke();
             return;
         }
+
+        // Filter out child controls, tooltips, and invisible helper HWNDs so EVENT_OBJECT_CREATE/HIDE/NAMECHANGE
+        // never spam Dock refreshes dozens of times per second!
+        if (GetAncestor(hwnd, 2 /* GA_ROOT */) != hwnd) return;
+        int exStyle = GetWindowLongW(hwnd, GWL_EXSTYLE);
+        if ((exStyle & WS_EX_TOOLWINDOW) != 0 || (exStyle & WS_EX_NOACTIVATE) != 0) return;
 
         WindowsChanged?.Invoke();
     }
@@ -277,6 +283,9 @@ public sealed class WindowTracker : IWindowTracker
 
     [DllImport("user32.dll")]
     private static extern nint GetWindow(nint hwnd, uint uCmd);
+
+    [DllImport("user32.dll")]
+    private static extern nint GetAncestor(nint hwnd, uint gaFlags);
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern int GetWindowLongW(nint hwnd, int nIndex);

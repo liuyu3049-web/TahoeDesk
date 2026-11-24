@@ -574,6 +574,26 @@ public partial class MenuBarWindow : Window
         SpotlightRequested?.Invoke();
     }
 
+    private void OnWifiBarClick(object sender, RoutedEventArgs e)
+    {
+        _menuPopup.IsOpen = false;
+        _calendarPopup.IsOpen = false;
+        _trayOverflowPopup.IsOpen = false;
+
+        if (_controlCenterPopup.IsOpen)
+        {
+            _controlCenterPopup.IsOpen = false;
+            return;
+        }
+
+        _controlCenterPopup.SetWifiDrawerExpanded(true);
+        _controlCenterPopup.PlacementTarget = WifiBarButton;
+        _controlCenterPopup.HorizontalOffset = -230;
+        _controlCenterPopup.VerticalOffset = 4;
+        ControlCenterButton.Tag = "Active";
+        _controlCenterPopup.IsOpen = true;
+    }
+
     private void OnControlCenterClick(object sender, RoutedEventArgs e)
     {
         _menuPopup.IsOpen = false;
@@ -586,6 +606,7 @@ public partial class MenuBarWindow : Window
             return;
         }
 
+        _controlCenterPopup.SetWifiDrawerExpanded(false);
         _controlCenterPopup.PlacementTarget = ControlCenterButton;
         _controlCenterPopup.HorizontalOffset = -270;
         _controlCenterPopup.VerticalOffset = 4;
