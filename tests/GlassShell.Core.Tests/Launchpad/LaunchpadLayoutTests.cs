@@ -226,14 +226,7 @@ public sealed class LaunchpadLayoutTests
         // Cross-page reorder: move item from Page 1 (app:37) to Page 0 slot 0 (app:0)
         Assert.True(mgr.Reorder("app:37", "app:0"));
         Assert.Equal("app:37", mgr.GetPage(0, LaunchpadFilterMode.Primary)[0].Id);
-
-        // ApplyPriorityOrder puts matched apps first in exact order, while NEVER unhiding HiddenApp
-        int matched = mgr.ApplyPriorityOrder(["App39", "HiddenApp", "App38", "App10"]);
-        Assert.Equal(3, matched);
-        var page0 = mgr.GetPage(0, LaunchpadFilterMode.Primary);
-        Assert.Equal("App39", page0[0].Title);
-        Assert.Equal("App38", page0[1].Title);
-        Assert.Equal("App10", page0[2].Title);
-        Assert.DoesNotContain(page0, e => e.Title == "HiddenApp");
+        Assert.True(mgr.MoveToEndOfPage("app:38", 0, LaunchpadFilterMode.Primary));
+        Assert.Contains(mgr.GetPage(0, LaunchpadFilterMode.Primary), e => e.Id == "app:38");
     }
 }

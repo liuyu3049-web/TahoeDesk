@@ -421,59 +421,6 @@ public sealed class LaunchpadLayoutManager
         return Reorder(sourceId, lastOnPage.Id);
     }
 
-    /// <summary>
-    /// Reorders Launchpad entries so items matching <paramref name="orderedAppNames"/> (e.g. from Windows 11 Start Menu Pinned list)
-    /// appear first in exact order, while strictly keeping all user-hidden apps hidden.
-    /// </summary>
-    public int ApplyPriorityOrder(IReadOnlyList<string> orderedAppNames)
-    {
-        if (orderedAppNames.Count == 0 || _entries.Count == 0) return 0;
-
-        var prioritized = new List<LaunchpadEntry>();
-        var usedIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-        foreach (string rawName in orderedAppNames)
-        {
-            string targetName = rawName.Trim();
-            if (string.IsNullOrEmpty(targetName)) continue;
-
-            // Exact match first, then case-insensitive prefix/contains match (skipping explicitly hidden entries!)
-            LaunchpadEntry? match = _entries.FirstOrDefault(e =>
-                !usedIds.Contains(e.Id)
-                && !IsEntryExplicitlyHidden(e)
-                && string.Equals(e.Title.Trim(), targetName, StringComparison.OrdinalIgnoreCase));
-
-            match ??= _entries.FirstOrDefault(e =>
-                !usedIds.Contains(e.Id)
-                && !IsEntryExplicitlyHidden(e)
-                && (e.Title.Contains(targetName, StringComparison.OrdinalIgnoreCase)
-                    || targetName.Contains(e.Title.Trim(), StringComparison.OrdinalIgnoreCase)));
-
-            if (match is not null)
-            {
-                usedIds.Add(match.Id);
-                prioritized.Add(match);
-            }
-        }
-
-        if (prioritized.Count == 0) return 0;
-
-        var reordered = new List<LaunchpadEntry>(_entries.Count);
-        reordered.AddRange(prioritized);
-        foreach (var e in _entries)
-        {
-            if (usedIds.Add(e.Id))
-            {
-                reordered.Add(e);
-            }
-        }
-
-        _entries.Clear();
-        _entries.AddRange(reordered);
-        SortMode = LaunchpadSortMode.Custom;
-        return prioritized.Count;
-    }
-
     public bool MergeIntoFolder(string sourceId, string targetId, string defaultFolderName = "应用文件夹")
     {
         if (string.Equals(sourceId, targetId, StringComparison.OrdinalIgnoreCase)) return false;

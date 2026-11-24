@@ -912,34 +912,6 @@ public partial class LaunchpadWindow : Window
         }
     }
 
-    private async void OnSyncStartMenuOrderClick(object sender, RoutedEventArgs e)
-    {
-        CancelActiveDrag();
-        SyncStartOrderBtn.IsEnabled = false;
-        Hide();
-        try
-        {
-            var pinnedNames = await StartMenuPinnedReader.CapturePinnedAppNamesAsync();
-            if (pinnedNames.Count > 0)
-            {
-                int matched = _layout.ApplyPriorityOrder(pinnedNames);
-                if (matched > 0)
-                {
-                    _currentPage = 0;
-                    _layout.Save(_layoutPath);
-                }
-            }
-        }
-        finally
-        {
-            SyncStartOrderBtn.IsEnabled = true;
-            UpdateSortLabel();
-            RenderCurrentView();
-            Show();
-            Activate();
-        }
-    }
-
     private void OnRescanClick(object sender, RoutedEventArgs e)
     {
         CancelActiveDrag();
