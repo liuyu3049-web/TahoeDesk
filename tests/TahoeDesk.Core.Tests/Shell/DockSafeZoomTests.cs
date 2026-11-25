@@ -68,8 +68,10 @@ public sealed class DockSafeZoomTests
     {
         Assert.True(WindowTracker.IsKnownCaptureOverlay("Windows.UI.Core.CoreWindow", "ScreenClippingHost"));
         Assert.True(WindowTracker.IsKnownCaptureOverlay("WeChatScreenshotWnd", "Weixin"));
+        Assert.True(WindowTracker.IsKnownCaptureOverlay("Qt680QWindowIcon", "Weixin", isTopmost: true));
+        Assert.False(WindowTracker.IsKnownCaptureOverlay("Qt680QWindowIcon", "Weixin", isTopmost: false));
         Assert.True(WindowTracker.IsKnownCaptureOverlay("Qt5QWindow", "Snipaste"));
         Assert.True(WindowTracker.IsKnownCaptureOverlay("Qt6QWindow", "PixPin"));
-        Assert.False(WindowTracker.IsKnownCaptureOverlay("Chrome_WidgetWin_1", "chrome"));
+        Assert.False(WindowTracker.IsKnownCaptureOverlay("Chrome_WidgetWin_1", "chrome", isTopmost: false));
     }
 }

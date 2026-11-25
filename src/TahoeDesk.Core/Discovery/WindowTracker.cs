@@ -25,6 +25,7 @@ public sealed class WindowTracker : IWindowTracker
     private const int GWL_STYLE = -16;
     private const int GWL_EXSTYLE = -20;
     private const int WS_CAPTION = 0x00C00000;
+    private const int WS_EX_TOPMOST = 0x00000008;
     private const int WS_EX_TRANSPARENT = 0x00000020;
     private const int WS_EX_TOOLWINDOW = 0x00000080;
     private const int WS_EX_APPWINDOW = 0x00040000;
@@ -110,7 +111,7 @@ public sealed class WindowTracker : IWindowTracker
     /// Identifies screenshot / screen-capture / remote-desktop overlay windows that should never collapse
     /// TahoeDesk's MenuBar or Dock when active.
     /// </summary>
-    public static bool IsKnownCaptureOverlay(string className, string processName)
+    public static bool IsKnownCaptureOverlay(string className, string processName, bool isTopmost = false)
     {
         if (!string.IsNullOrEmpty(className))
         {
@@ -126,7 +127,7 @@ public sealed class WindowTracker : IWindowTracker
 
         if (!string.IsNullOrEmpty(processName))
         {
-            return processName.Equals("ScreenClippingHost", StringComparison.OrdinalIgnoreCase)
+            if (processName.Equals("ScreenClippingHost", StringComparison.OrdinalIgnoreCase)
                 || processName.Equals("SnippingTool", StringComparison.OrdinalIgnoreCase)
                 || processName.Equals("Snipaste", StringComparison.OrdinalIgnoreCase)
                 || processName.Equals("PixPin", StringComparison.OrdinalIgnoreCase)
@@ -134,7 +135,23 @@ public sealed class WindowTracker : IWindowTracker
                 || processName.Equals("FSCapture", StringComparison.OrdinalIgnoreCase)
                 || processName.Equals("Greenshot", StringComparison.OrdinalIgnoreCase)
                 || processName.Equals("Flameshot", StringComparison.OrdinalIgnoreCase)
-                || processName.Equals("PicPick", StringComparison.OrdinalIgnoreCase);
+                || processName.Equals("PicPick", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            // WeChat 4.0 (Weixin Qt6), WeChat 3.x, QQ, DingTalk, Feishu, WXWork use topmost borderless windows
+            // for their built-in screenshot tools (e.g. Alt+A / Ctrl+Alt+A) without "Screenshot" in the Qt class name.
+            if (isTopmost && (processName.Equals("Weixin", StringComparison.OrdinalIgnoreCase)
+                || processName.Equals("WeChat", StringComparison.OrdinalIgnoreCase)
+                || processName.Equals("QQ", StringComparison.OrdinalIgnoreCase)
+                || processName.Equals("DingTalk", StringComparison.OrdinalIgnoreCase)
+                || processName.Equals("Feishu", StringComparison.OrdinalIgnoreCase)
+                || processName.Equals("Lark", StringComparison.OrdinalIgnoreCase)
+                || processName.Equals("WXWork", StringComparison.OrdinalIgnoreCase)))
+            {
+                return true;
+            }
         }
 
         return false;
@@ -192,7 +209,7 @@ public sealed class WindowTracker : IWindowTracker
                         {
                             procName = Path.GetFileNameWithoutExtension(exe);
                         }
-                        isCaptureOverlay = IsKnownCaptureOverlay(className, procName);
+                        isCaptureOverlay = IsKnownCaptureOverlay(className, procName, isTopmost: (exStyle & WS_EX_TOPMOST) != 0);
                     }
 
                     result.Add(new VisibleWindowBounds(

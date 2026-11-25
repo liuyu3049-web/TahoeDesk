@@ -25,7 +25,10 @@ public sealed class LowLevelWinKeyHook : IDisposable
     private const int HTCAPTION = 2;
     private const uint GA_ROOT = 2;
     private const int GWL_STYLE = -16;
+    private const int WS_MAXIMIZEBOX = 0x00010000;
     private const int WS_THICKFRAME = 0x00040000;
+    private const int SM_CXDOUBLECLK = 36;
+    private const int SM_CYDOUBLECLK = 37;
     private const uint SMTO_BLOCK = 0x0001;
     private const uint SMTO_ABORTIFHUNG = 0x0002;
     private const uint LLKHF_INJECTED = 0x00000010;
@@ -129,10 +132,12 @@ public sealed class LowLevelWinKeyHook : IDisposable
     {
         long now = Environment.TickCount64;
         uint dblMs = Math.Clamp(GetDoubleClickTime(), 200u, 800u);
+        int maxDx = Math.Max(10, GetSystemMetrics(SM_CXDOUBLECLK));
+        int maxDy = Math.Max(10, GetSystemMetrics(SM_CYDOUBLECLK));
         bool isDoubleClick = _lastLeftDownTick != 0
             && (now - _lastLeftDownTick) <= dblMs
-            && Math.Abs(pt.X - _lastLeftDownX) <= 6
-            && Math.Abs(pt.Y - _lastLeftDownY) <= 6;
+            && Math.Abs(pt.X - _lastLeftDownX) <= maxDx
+            && Math.Abs(pt.Y - _lastLeftDownY) <= maxDy;
 
         _lastLeftDownTick = now;
         _lastLeftDownX = pt.X;
@@ -149,7 +154,7 @@ public sealed class LowLevelWinKeyHook : IDisposable
         if (pid == 0 || pid == _selfProcessId) return false;
 
         int style = GetWindowLongW(root, GWL_STYLE);
-        if ((style & WS_THICKFRAME) == 0) return false;
+        if ((style & (WS_THICKFRAME | WS_MAXIMIZEBOX)) == 0) return false;
 
         if (!GetWindowRect(root, out RECT rc)) return false;
         // Fast geometric gate: must be within the top titlebar band (~96px max on 200% DPI)
@@ -159,12 +164,18 @@ public sealed class LowLevelWinKeyHook : IDisposable
         if (pt.X > rc.Right - buttonZonePx) return false;
 
         nint lp = (nint)((pt.Y << 16) | (pt.X & 0xFFFF));
-        if (SendMessageTimeoutW(root, WM_NCHITTEST, 0, lp, SMTO_BLOCK | SMTO_ABORTIFHUNG, 30, out nint hitResult) == 0)
+        bool isCaptionHit = false;
+        if (SendMessageTimeoutW(root, WM_NCHITTEST, 0, lp, SMTO_BLOCK | SMTO_ABORTIFHUNG, 30, out nint hitResult) != 0)
         {
-            return false;
+            isCaptionHit = (int)hitResult == HTCAPTION;
+        }
+        if (!isCaptionHit && hitWnd != root
+            && SendMessageTimeoutW(hitWnd, WM_NCHITTEST, 0, lp, SMTO_BLOCK | SMTO_ABORTIFHUNG, 25, out nint childHit) != 0)
+        {
+            isCaptionHit = (int)childHit == HTCAPTION;
         }
 
-        if ((int)hitResult != HTCAPTION) return false;
+        if (!isCaptionHit) return false;
 
         // Reset double-click sequence so a fast triple-click does not double-trigger
         _lastLeftDownTick = 0;
@@ -286,6 +297,9 @@ public sealed class LowLevelWinKeyHook : IDisposable
 
     [DllImport("user32.dll")]
     private static extern uint GetDoubleClickTime();
+
+    [DllImport("user32.dll")]
+    private static extern int GetSystemMetrics(int nIndex);
 
     [DllImport("user32.dll")]
     private static extern nint WindowFromPoint(POINT point);
