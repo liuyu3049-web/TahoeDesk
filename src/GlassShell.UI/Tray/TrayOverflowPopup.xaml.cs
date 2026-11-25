@@ -41,6 +41,7 @@ public partial class TrayOverflowPopup : Popup
     public event Action<TrayDisplayItem, TrayMouseAction, ScreenRect, Point>? TrayIconInvoked;
     public event Action<TrayDisplayItem>? TrayIconPinToggled;
     public event Action<string, string>? TrayOverflowReordered;
+    public event Action? ResyncTrayRequested;
     public event Action? NativeTaskbarPeekRequested;
 
     private IEnumerable<nint> CollectOpenHwnds()
@@ -224,6 +225,12 @@ public partial class TrayOverflowPopup : Popup
         {
             return (default, new Point(0, 0));
         }
+    }
+
+    private void OnResyncTrayClick(object sender, RoutedEventArgs e)
+    {
+        IsOpen = false;
+        ResyncTrayRequested?.Invoke();
     }
 
     private void OnNativeTaskbarPeekClick(object sender, RoutedEventArgs e)

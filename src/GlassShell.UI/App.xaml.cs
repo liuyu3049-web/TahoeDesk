@@ -148,7 +148,13 @@ public partial class App : Application
         _launchpadWindow = new LaunchpadWindow(_backdropSampler);
         _launchpadWindow.ApplySettings(_settings, isDark);
         _launchpadWindow.RescanRequested += () => _ = RefreshSearchAndLaunchpadIndexAsync();
-        _launchpadWindow.IsPinnedToDockCheck = path => _settings.PinnedAppPaths.Any(p => string.Equals(p, path, StringComparison.OrdinalIgnoreCase));
+        _launchpadWindow.IsPinnedToDockCheck = path =>
+        {
+            string resolved = InstalledAppScanner.ResolveShortcutTargetOrSelf(path);
+            return _settings.PinnedAppPaths.Any(p =>
+                string.Equals(p, path, StringComparison.OrdinalIgnoreCase)
+                || string.Equals(p, resolved, StringComparison.OrdinalIgnoreCase));
+        };
         _launchpadWindow.PinToDockToggled += ToggleAppPinnedToDock;
         _spotlightWindow = new SpotlightWindow(_backdropSampler, _settings, isDark);
         _spotlightWindow.SystemCommandRequested += HandleSpotlightSystemCommand;
@@ -181,6 +187,7 @@ public partial class App : Application
             dock.LaunchpadRequested += () => ToggleLaunchpad(monitor);
             dock.SettingsUpdated += ApplyUpdatedSettings;
             dock.RemoveRecentAppRequested += RemoveRecentApp;
+            dock.ActivateTrayAppRequested += HandleActivateTrayApp;
 
             menuBar.Show();
             dock.Show();
@@ -351,6 +358,7 @@ public partial class App : Application
                 dock.LaunchpadRequested += () => ToggleLaunchpad(monitor);
                 dock.SettingsUpdated += ApplyUpdatedSettings;
                 dock.RemoveRecentAppRequested += RemoveRecentApp;
+                dock.ActivateTrayAppRequested += HandleActivateTrayApp;
 
                 menuBar.Show();
                 dock.Show();
@@ -371,6 +379,7 @@ public partial class App : Application
 
             _hotkeyManager.Register(newPrimary.MenuBar.Hwnd, id: 1, _settings.SpotlightHotkey, () => ToggleSpotlight(GetCursorMonitor()));
 
+            _trayProxyHost.ResyncAllTrayIcons();
             var trayItems = _trayProxyHost.GetCurrentItems();
             foreach (var s in _shells) s.MenuBar.UpdateTrayItems(trayItems);
             _ = RefreshDockItemsAsync();
@@ -527,6 +536,7 @@ public partial class App : Application
             var items = await Task.Run(() =>
             {
                 var windows = _windowTracker.GetTopLevelWindows();
+                var trayExes = _trayProxyHost?.GetActiveTrayExecutablePaths();
                 List<string> recentCopy;
                 List<string> stableCopy;
 
@@ -550,7 +560,8 @@ public partial class App : Application
                         }
                     }
 
-                    _stableRunningOrder.RemoveAll(p => !activeExes.Contains(p));
+                    // Keep apps that closed to system tray (e.g. WeChat X button) in _stableRunningOrder so they stay in the Dock!
+                    _stableRunningOrder.RemoveAll(p => !activeExes.Contains(p) && (trayExes is null || !trayExes.Contains(p)));
                     recentCopy = _recentApps.ToList();
                     stableCopy = _stableRunningOrder.ToList();
                 }
@@ -562,7 +573,7 @@ public partial class App : Application
                 }
 
                 var rb = _recycleBinService.Query();
-                return DockModelCoordinator.BuildDockItems(settingsSnapshot, windows, recentCopy, rb, stableCopy);
+                return DockModelCoordinator.BuildDockItems(settingsSnapshot, windows, recentCopy, rb, stableCopy, trayExes);
             });
 
             await Dispatcher.InvokeAsync(() =>
@@ -599,11 +610,31 @@ public partial class App : Application
     private void ToggleAppPinnedToDock(string targetPath)
     {
         if (string.IsNullOrWhiteSpace(targetPath)) return;
-        bool exists = _settings.PinnedAppPaths.Any(p => string.Equals(p, targetPath, StringComparison.OrdinalIgnoreCase));
+        string resolved = InstalledAppScanner.ResolveShortcutTargetOrSelf(targetPath);
+        bool exists = _settings.PinnedAppPaths.Any(p =>
+            string.Equals(p, targetPath, StringComparison.OrdinalIgnoreCase)
+            || string.Equals(p, resolved, StringComparison.OrdinalIgnoreCase));
         var nextPins = exists
-            ? _settings.PinnedAppPaths.Where(p => !string.Equals(p, targetPath, StringComparison.OrdinalIgnoreCase)).ToList()
-            : [.. _settings.PinnedAppPaths, targetPath];
+            ? _settings.PinnedAppPaths.Where(p =>
+                !string.Equals(p, targetPath, StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(p, resolved, StringComparison.OrdinalIgnoreCase)).ToList()
+            : [.. _settings.PinnedAppPaths, resolved];
         ApplyUpdatedSettings(_settings with { PinnedAppPaths = nextPins });
+    }
+
+    private void HandleActivateTrayApp(string targetPath)
+    {
+        if (_trayProxyHost is not null && _trayProxyHost.TryActivateTrayAppByExePath(targetPath))
+        {
+            return;
+        }
+
+        // Fallback if tray icon wasn't captured yet: launch/focus target executable directly
+        try
+        {
+            Process.Start(new ProcessStartInfo(targetPath) { UseShellExecute = true });
+        }
+        catch { }
     }
 
     private void RemoveRecentApp(string targetPath)

@@ -74,6 +74,7 @@ public partial class MenuBarWindow : Window
         _trayOverflowPopup.TrayIconInvoked += HandleTrayIconInvoked;
         _trayOverflowPopup.TrayIconPinToggled += HandleTrayIconPinToggled;
         _trayOverflowPopup.TrayOverflowReordered += HandleTrayOverflowReordered;
+        _trayOverflowPopup.ResyncTrayRequested += () => _trayProxyHost.ResyncAllTrayIcons();
         _trayOverflowPopup.NativeTaskbarPeekRequested += ToggleNativeTaskbarPeek;
         _controlCenterPopup.Closed += (_, _) => ControlCenterButton.Tag = null;
         _batteryPopup.Closed += (_, _) => BatteryButton.Tag = null;
@@ -674,6 +675,7 @@ public partial class MenuBarWindow : Window
         if (_taskbarController.IsTrayPeekActive)
         {
             _taskbarController.EndTrayPeek();
+            _trayProxyHost.ResyncAllTrayIcons();
         }
         else
         {

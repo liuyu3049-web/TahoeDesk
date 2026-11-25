@@ -106,6 +106,20 @@ public static class InstalledAppScanner
         return results.OrderBy(a => a.Name, StringComparer.CurrentCultureIgnoreCase).ToList();
     }
 
+    public static string ResolveShortcutTargetOrSelf(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path)) return path;
+        if (path.EndsWith(".lnk", StringComparison.OrdinalIgnoreCase) && File.Exists(path))
+        {
+            string? resolved = TryResolveShortcutTarget(path, out _);
+            if (!string.IsNullOrWhiteSpace(resolved) && File.Exists(resolved))
+            {
+                return resolved!;
+            }
+        }
+        return path;
+    }
+
     public static InstalledAppEntry? CreateManualEntry(string filePath)
     {
         if (string.IsNullOrWhiteSpace(filePath) || !File.Exists(filePath)) return null;

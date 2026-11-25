@@ -113,6 +113,103 @@ public sealed class TrayProxyHost : IDisposable
         _maintenanceTimer.Start();
 
         BroadcastTaskbarCreated(isSelf: true);
+
+        // Delayed second sync (+2.5s) catches boot-time autostart apps (like Wallpaper Engine)
+        // that finish creating their tray windows slightly after GlassShell launches!
+        var delayedSync = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(2500) };
+        delayedSync.Tick += (_, _) =>
+        {
+            delayedSync.Stop();
+            if (!_disposed && !_proxyDestroyed)
+            {
+                ResyncAllTrayIcons();
+            }
+        };
+        delayedSync.Start();
+    }
+
+    /// <summary>
+    /// Ensures GlassShell's proxy Shell_TrayWnd stays strictly ahead of Explorer's Shell_TrayWnd in Z-order
+    /// so shell32!FindWindow("Shell_TrayWnd") ALWAYS delivers new/modified tray icons (WeChat, Wallpaper Engine, etc.) here first.
+    /// </summary>
+    public void EnsureProxyFirstInZOrder()
+    {
+        if (!_started || _disposed || _proxyDestroyed || _proxyTrayHwnd == 0) return;
+        nint first = FindWindowExW(0, 0, TrayClassName, null);
+        if (first != _proxyTrayHwnd)
+        {
+            SetWindowPos(_proxyTrayHwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE);
+        }
+    }
+
+    public void ResyncAllTrayIcons()
+    {
+        if (!_started || _disposed || _proxyDestroyed || _proxyTrayHwnd == 0) return;
+        EnsureProxyFirstInZOrder();
+        BroadcastTaskbarCreated(isSelf: true);
+    }
+
+    public IReadOnlySet<string> GetActiveTrayExecutablePaths()
+    {
+        var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var rec in _registry.GetVisibleIcons())
+        {
+            string? path = TryResolveOwnerExePath(rec.Key.OwnerHwnd);
+            if (!string.IsNullOrWhiteSpace(path))
+            {
+                paths.Add(path);
+            }
+        }
+        return paths;
+    }
+
+    /// <summary>
+    /// Restores a background tray-resident app (such as WeChat closed with X) by simulating a tray click
+    /// on its registered tray icon instead of launching a duplicate process/window.
+    /// </summary>
+    public bool TryActivateTrayAppByExePath(string exePath)
+    {
+        if (string.IsNullOrWhiteSpace(exePath)) return false;
+        string targetNorm = exePath.Trim().TrimEnd('\\');
+
+        TrayIconRecord? match = null;
+        foreach (var rec in _registry.GetVisibleIcons())
+        {
+            string? ownerExe = TryResolveOwnerExePath(rec.Key.OwnerHwnd);
+            if (!string.IsNullOrWhiteSpace(ownerExe)
+                && string.Equals(ownerExe.Trim().TrimEnd('\\'), targetNorm, StringComparison.OrdinalIgnoreCase))
+            {
+                match = rec;
+                break;
+            }
+        }
+
+        if (match is null) return false;
+
+        int sx = match.LastScreenRect.Width > 0 ? (match.LastScreenRect.Left + match.LastScreenRect.Right) / 2 : 1200;
+        int sy = match.LastScreenRect.Height > 0 ? match.LastScreenRect.Bottom : 28;
+        DispatchMouseAction(match, TrayMouseAction.LeftClick, sx, sy);
+        return true;
+    }
+
+    private static string? TryResolveOwnerExePath(nint ownerHwnd)
+    {
+        if (ownerHwnd == 0 || !IsWindow(ownerHwnd)) return null;
+        GetWindowThreadProcessId(ownerHwnd, out uint pid);
+        if (pid == 0) return null;
+
+        nint hProc = OpenProcess(0x1000 /* PROCESS_QUERY_LIMITED_INFORMATION */, false, pid);
+        if (hProc == 0) return null;
+        try
+        {
+            var sb = new System.Text.StringBuilder(520);
+            int cap = sb.Capacity;
+            return QueryFullProcessImageNameW(hProc, 0, sb, ref cap) ? sb.ToString() : null;
+        }
+        finally
+        {
+            CloseHandle(hProc);
+        }
     }
 
     public void HandleExternalExplorerRestart()
@@ -353,6 +450,8 @@ public sealed class TrayProxyHost : IDisposable
     {
         if (_disposed) return;
 
+        EnsureProxyFirstInZOrder();
+
         bool uiNeedsRefresh = false;
         long now = Environment.TickCount64;
 
@@ -579,4 +678,18 @@ public sealed class TrayProxyHost : IDisposable
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool SetForegroundWindow(nint hWnd);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern nint FindWindowExW(nint hwndParent, nint hwndChildAfter, string lpszClass, string? lpszWindow);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern nint OpenProcess(uint dwDesiredAccess, [MarshalAs(UnmanagedType.Bool)] bool bInheritHandle, uint dwProcessId);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool QueryFullProcessImageNameW(nint hProcess, int dwFlags, System.Text.StringBuilder lpExeName, ref int lpdwSize);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CloseHandle(nint hObject);
 }

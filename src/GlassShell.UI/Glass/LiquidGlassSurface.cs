@@ -78,7 +78,9 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
     private bool _hasValidFrame;
     private bool _isHooked;
     private long _lastRenderMs = -200;
+    private long _firstMissMs;
     private const long MinBackdropRefreshIntervalMs = 66; // ~15 Hz staggered cap prevents AllowsTransparency PCIe readback stutter
+    private const long TransientMissGraceMs = 1500; // Keep last valid glass frame across brief DXGI misses (prevents Dock flicker!)
 
     public LiquidGlassSurface()
     {
@@ -241,6 +243,7 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
             && _renderer.SharedD3D9SurfacePtr != 0)
         {
             _lastRenderMs = nowMs;
+            _firstMissMs = 0;
             nint ptr = _renderer.SharedD3D9SurfacePtr;
             if (frameUpdated || _boundSurfacePtr != ptr || !_hasValidFrame)
             {
@@ -268,8 +271,17 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
         }
         else if (_hasValidFrame)
         {
-            DetachBackBuffer();
-            InvalidateVisual();
+            // Retain the last valid Liquid Glass frame across transient DXGI timeouts/AccessLost
+            // so the Dock NEVER flashes to a gray fallback rectangle!
+            if (_firstMissMs == 0)
+            {
+                _firstMissMs = nowMs;
+            }
+            else if ((nowMs - _firstMissMs) >= TransientMissGraceMs)
+            {
+                DetachBackBuffer();
+                InvalidateVisual();
+            }
         }
     }
 

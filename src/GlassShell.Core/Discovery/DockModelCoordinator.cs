@@ -15,9 +15,14 @@ public static class DockModelCoordinator
         IReadOnlyList<WindowInfo> runningWindows,
         IReadOnlyList<string> recentAppPaths,
         RecycleBinStatus recycleBin,
-        IReadOnlyList<string>? stableRunningOrder = null)
+        IReadOnlyList<string>? stableRunningOrder = null,
+        IReadOnlySet<string>? trayResidentExePaths = null)
     {
         var items = new List<DockItemModel>();
+
+        var traySet = trayResidentExePaths is { Count: > 0 }
+            ? new HashSet<string>(trayResidentExePaths.Select(NormalizePath), StringComparer.OrdinalIgnoreCase)
+            : null;
 
         // Group running windows by normalized executable path
         var runningByExe = runningWindows
@@ -61,8 +66,10 @@ public static class DockModelCoordinator
             if (!pinnedSet.Add(norm)) continue;
 
             runningByExe.TryGetValue(norm, out var openList);
-            string title = openList is { Count: > 0 }
-                ? openList[0].AppDisplayName
+            bool hasVisibleWindow = openList is { Count: > 0 };
+            bool isTrayResident = traySet?.Contains(norm) == true;
+            string title = hasVisibleWindow
+                ? openList![0].AppDisplayName
                 : Path.GetFileNameWithoutExtension(rawPath);
 
             items.Add(new DockItemModel(
@@ -72,7 +79,7 @@ public static class DockModelCoordinator
                 Kind: DockItemKind.Application,
                 Section: DockSection.PinnedApps,
                 IsPinned: true,
-                IsRunning: openList is { Count: > 0 },
+                IsRunning: hasVisibleWindow || isTrayResident,
                 OpenWindowHandles: openList?.Select(w => w.Hwnd).ToList() ?? [],
                 IsFlashing: openList?.Any(w => w.IsFlashing) ?? false));
         }
@@ -86,21 +93,35 @@ public static class DockModelCoordinator
 
         foreach (var exeKey in orderedRunningKeys)
         {
-            if (!runningByExe.TryGetValue(exeKey, out var list)) continue;
-            // Exclude explorer.exe (already represented by 此电脑)
             if (exeKey.EndsWith(@"\explorer.exe", StringComparison.OrdinalIgnoreCase)) continue;
-            if (!shownMiddle.Add(exeKey)) continue;
-
-            items.Add(new DockItemModel(
-                Id: $"app:{exeKey}",
-                Title: list[0].AppDisplayName,
-                TargetPath: list[0].ExecutablePath,
-                Kind: DockItemKind.Application,
-                Section: DockSection.RunningOrRecent,
-                IsPinned: false,
-                IsRunning: true,
-                OpenWindowHandles: list.Select(w => w.Hwnd).ToList(),
-                IsFlashing: list.Any(w => w.IsFlashing)));
+            if (runningByExe.TryGetValue(exeKey, out var list))
+            {
+                if (!shownMiddle.Add(exeKey)) continue;
+                items.Add(new DockItemModel(
+                    Id: $"app:{exeKey}",
+                    Title: list[0].AppDisplayName,
+                    TargetPath: list[0].ExecutablePath,
+                    Kind: DockItemKind.Application,
+                    Section: DockSection.RunningOrRecent,
+                    IsPinned: false,
+                    IsRunning: true,
+                    OpenWindowHandles: list.Select(w => w.Hwnd).ToList(),
+                    IsFlashing: list.Any(w => w.IsFlashing)));
+            }
+            else if (traySet?.Contains(exeKey) == true && shownMiddle.Add(exeKey))
+            {
+                // App was open and closed to system tray (e.g. WeChat X button): keep it in the Dock as running!
+                items.Add(new DockItemModel(
+                    Id: $"app:{exeKey}",
+                    Title: Path.GetFileNameWithoutExtension(exeKey),
+                    TargetPath: exeKey,
+                    Kind: DockItemKind.Application,
+                    Section: DockSection.RunningOrRecent,
+                    IsPinned: false,
+                    IsRunning: true,
+                    OpenWindowHandles: [],
+                    IsFlashing: false));
+            }
         }
 
         if (settings.ShowRecentApps)
