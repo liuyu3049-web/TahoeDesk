@@ -108,16 +108,14 @@ public partial class MenuBarWindow : Window
     {
         _settings = settings;
         _vm.ApplySettings(settings, isDarkMode);
-        BarGlassBackdrop.OpacityPreset = settings.OpacityPreset;
-        BarGlassBackdrop.IsDarkMode = isDarkMode;
         if (settings.ShowMenuBarBackground)
         {
-            BarGlassBackdrop.AttachSampler(_sampler);
-            BarGlassBackdrop.Visibility = Visibility.Visible;
+            ApplyBarFrostAppearance(settings.OpacityPreset, isDarkMode);
+            BarFrostBackdrop.Visibility = Visibility.Visible;
         }
         else
         {
-            BarGlassBackdrop.Visibility = Visibility.Collapsed;
+            BarFrostBackdrop.Visibility = Visibility.Collapsed;
         }
         _menuPopup.ConfigureVisuals(_sampler, settings.OpacityPreset, isDarkMode);
         _calendarPopup.ConfigureVisuals(_sampler, settings.OpacityPreset, isDarkMode);
@@ -127,6 +125,36 @@ public partial class MenuBarWindow : Window
         WifiBarButton.Visibility = settings.ShowMenuBarWifiIcon ? Visibility.Visible : Visibility.Collapsed;
         UpdateTopBarInk(settings.ShowMenuBarBackground, isDarkMode);
         RebuildTrayVisuals();
+    }
+
+    private void ApplyBarFrostAppearance(GlassOpacityPreset preset, bool isDarkMode)
+    {
+        byte alpha = (preset, isDarkMode) switch
+        {
+            (GlassOpacityPreset.Clear, true) => 0x82,
+            (GlassOpacityPreset.Balanced, true) => 0xA8,
+            (GlassOpacityPreset.Frosted, true) => 0xCC,
+            (GlassOpacityPreset.Clear, false) => 0x9C,
+            (GlassOpacityPreset.Balanced, false) => 0xBE,
+            _ => 0xDC
+        };
+
+        var topColor = isDarkMode
+            ? Color.FromArgb((byte)Math.Min(255, alpha + 12), 0x1D, 0x20, 0x29)
+            : Color.FromArgb((byte)Math.Min(255, alpha + 12), 0xFB, 0xFC, 0xFF);
+        var botColor = isDarkMode
+            ? Color.FromArgb(alpha, 0x14, 0x16, 0x1E)
+            : Color.FromArgb(alpha, 0xEE, 0xF1, 0xF7);
+        var bg = new LinearGradientBrush(topColor, botColor, 90);
+        bg.Freeze();
+
+        var border = new SolidColorBrush(isDarkMode
+            ? Color.FromArgb(0x28, 0xFF, 0xFF, 0xFF)
+            : Color.FromArgb(0x22, 0x00, 0x00, 0x00));
+        border.Freeze();
+
+        BarFrostBackdrop.Background = bg;
+        BarFrostBackdrop.BorderBrush = border;
     }
 
     public void UpdateTrayItems(IReadOnlyList<TrayDisplayItem> items)
@@ -876,7 +904,6 @@ public partial class MenuBarWindow : Window
         {
             DeregisterShellHookWindow(Hwnd);
         }
-        BarGlassBackdrop.Dispose();
         base.OnClosed(e);
     }
 

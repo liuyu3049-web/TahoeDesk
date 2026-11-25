@@ -489,8 +489,8 @@ public partial class App : Application
             && Math.Abs(s.Monitor.Bounds.Top - targetMon.Bounds.Top) <= 4) ?? _shells[0];
 
         int topBarPx = (int)Math.Round(shell.MenuBar.Height * targetMon.DpiScale);
-        // Reserve resting Dock capsule height (DockIconSize + 18) + bottom margins (16) + breathing gap (6)
-        int dockReservePx = (int)Math.Round((_settings.DockIconSize + 40) * targetMon.DpiScale);
+        // Exact top edge of the resting Dock glass capsule (DockIconSize + 18 capsule + 10 + 6 bottom margins) + 1px hairline
+        int dockReservePx = (int)Math.Round((_settings.DockIconSize + 34) * targetMon.DpiScale) + 1;
         _dockSafeZoomManager.ToggleZoom(hwnd, targetMon, topBarPx, dockReservePx);
     }
 

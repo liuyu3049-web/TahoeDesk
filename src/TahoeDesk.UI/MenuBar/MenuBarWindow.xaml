@@ -19,12 +19,11 @@
     </Window.Resources>
 
     <Grid x:Name="RootGrid" Background="#01000000" MouseLeftButtonDown="OnBarBackgroundClick">
-        <!-- Optional Tahoe translucent background (default off = fully transparent) -->
-        <glass:LiquidGlassSurface x:Name="BarGlassBackdrop"
-                                  CornerRadius="0"
-                                  ShadowPadding="0"
-                                  BackdropSampleMode="ReflectBelow"
-                                  Visibility="Collapsed" />
+        <!-- Optional macOS Tahoe translucent frosted backdrop over the real wallpaper (never reflects app titlebars below!) -->
+        <Border x:Name="BarFrostBackdrop"
+                BorderThickness="0,0,0,1"
+                IsHitTestVisible="False"
+                Visibility="Collapsed" />
 
         <DockPanel LastChildFill="True" Margin="8,0,10,0">
             <!-- Leading: Win11 Logo + Active App Name (Bold) + Dynamic Foreground Menus -->
