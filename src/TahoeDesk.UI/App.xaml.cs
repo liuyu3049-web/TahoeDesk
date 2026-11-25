@@ -59,9 +59,11 @@ public partial class App : Application
     private readonly LinkedList<string> _recentApps = new();
     private readonly List<string> _stableRunningOrder = [];
     private readonly object _dockStateGate = new();
+    private readonly DockSafeZoomManager _dockSafeZoomManager = new();
     private DispatcherTimer? _dockDebounceTimer;
     private int _dockRefreshInFlight;
     private int? _originalTaskbarAutoHideState;
+    private long _lastAppBarHealMs;
     private bool _cleanedUp;
 
     protected override void OnStartup(StartupEventArgs e)
@@ -231,9 +233,10 @@ public partial class App : Application
             }
         }
 
-        // Register global Spotlight hotkey (Alt+Space) on primary MenuBar HWND and start Win-key Launchpad hook
+        // Register global Spotlight hotkey (Alt+Space) on primary MenuBar HWND and start Win-key Launchpad + titlebar double-click hook
         _hotkeyManager.Register(primary.MenuBar.Hwnd, id: 1, _settings.SpotlightHotkey, () => ToggleSpotlight(GetCursorMonitor()));
         _winKeyHook.SingleWinPressed += () => Dispatcher.InvokeAsync(() => ToggleLaunchpad(GetCursorMonitor()));
+        _winKeyHook.TitleBarDoubleClicked += hwnd => Dispatcher.InvokeAsync(() => HandleTitleBarDoubleClicked(hwnd));
         _winKeyHook.Start();
 
         _windowTracker.Start();
@@ -283,7 +286,11 @@ public partial class App : Application
 
     private void OnSessionSwitch(object? sender, SessionSwitchEventArgs e)
     {
-        if (e.Reason == SessionSwitchReason.SessionUnlock)
+        if (e.Reason is SessionSwitchReason.SessionUnlock
+            or SessionSwitchReason.RemoteConnect
+            or SessionSwitchReason.RemoteDisconnect
+            or SessionSwitchReason.ConsoleConnect
+            or SessionSwitchReason.ConsoleDisconnect)
         {
             ScheduleDisplayRebuild();
         }
@@ -326,10 +333,7 @@ public partial class App : Application
 
             foreach (var s in _shells)
             {
-                if (s != oldPrimary)
-                {
-                    _taskbarNative.UnregisterAppBar(s.MenuBar.Hwnd);
-                }
+                _taskbarNative.UnregisterAppBar(s.MenuBar.Hwnd);
                 s.MenuBar.Close();
                 s.Dock.Close();
             }
@@ -411,8 +415,83 @@ public partial class App : Application
             _taskbarController.HandleTaskbarShownEvent();
         }
 
+        // Self-heal if remote desktop software (ToDesk/Sunlogin/RustDesk/RDP) or Windows display reset
+        // wiped our top 28px AppBar work-area reservation (which otherwise lets maximized windows cover the Menu Bar!)
+        SelfHealTopAppBarsIfNeeded();
+
         // Always evaluate per-monitor fullscreen & maximize states independently (catches maximize/un-maximize on same HWND!)
         EvaluatePerMonitorVisibility(fg);
+    }
+
+    private void SelfHealTopAppBarsIfNeeded()
+    {
+        if (_taskbarController is not { IsAcquired: true } || _taskbarNative is null || _shells.Count == 0) return;
+
+        long nowMs = Environment.TickCount64;
+        if (nowMs - _lastAppBarHealMs < 2500) return;
+
+        var liveMonitors = MonitorContext.GetAllMonitors();
+        if (liveMonitors.Count == 0) return;
+
+        bool healedAny = false;
+        foreach (var s in _shells)
+        {
+            var liveMon = liveMonitors.FirstOrDefault(m =>
+                Math.Abs(m.Bounds.Left - s.Monitor.Bounds.Left) <= 4
+                && Math.Abs(m.Bounds.Top - s.Monitor.Bounds.Top) <= 4);
+            if (liveMon is null) continue;
+
+            int expectedTopPx = (int)Math.Round(s.MenuBar.Height * liveMon.DpiScale);
+            if (liveMon.WorkArea.Top < liveMon.Bounds.Top + expectedTopPx - 4)
+            {
+                _taskbarNative.RegisterTopAppBar(s.MenuBar.Hwnd, expectedTopPx, liveMon.Bounds);
+                if (s.MenuBar.Visibility == Visibility.Visible && s.MenuBar.Hwnd != 0)
+                {
+                    SetWindowPos(s.MenuBar.Hwnd, new nint(-1), 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010);
+                }
+                healedAny = true;
+            }
+        }
+
+        if (healedAny)
+        {
+            _lastAppBarHealMs = nowMs;
+            int curAutoHide = Win32TaskbarNative.GetTaskbarAutoHideState();
+            if ((curAutoHide & Win32TaskbarNative.ABS_AUTOHIDE) == 0)
+            {
+                Win32TaskbarNative.SetTaskbarAutoHideState(curAutoHide | Win32TaskbarNative.ABS_AUTOHIDE);
+            }
+            if (!_taskbarController.IsTrayPeekActive)
+            {
+                _taskbarController.HandleTaskbarShownEvent();
+            }
+        }
+    }
+
+    private void HandleTitleBarDoubleClicked(nint hwnd)
+    {
+        if (hwnd == 0 || _shells.Count == 0) return;
+
+        // Resolve which monitor currently hosts the window center
+        var liveMonitors = MonitorContext.GetAllMonitors();
+        MonitorContext targetMon = liveMonitors.FirstOrDefault(m => m.IsPrimary) ?? _shells[0].Monitor;
+        if (GetWindowRect(hwnd, out RECT wrc))
+        {
+            int cx = (wrc.Left + wrc.Right) / 2;
+            int cy = (wrc.Top + wrc.Bottom) / 2;
+            var hit = liveMonitors.FirstOrDefault(m =>
+                cx >= m.Bounds.Left && cx < m.Bounds.Right && cy >= m.Bounds.Top && cy < m.Bounds.Bottom);
+            if (hit is not null) targetMon = hit;
+        }
+
+        var shell = _shells.FirstOrDefault(s =>
+            Math.Abs(s.Monitor.Bounds.Left - targetMon.Bounds.Left) <= 4
+            && Math.Abs(s.Monitor.Bounds.Top - targetMon.Bounds.Top) <= 4) ?? _shells[0];
+
+        int topBarPx = (int)Math.Round(shell.MenuBar.Height * targetMon.DpiScale);
+        // Reserve resting Dock capsule height (DockIconSize + 18) + bottom margins (16) + breathing gap (6)
+        int dockReservePx = (int)Math.Round((_settings.DockIconSize + 40) * targetMon.DpiScale);
+        _dockSafeZoomManager.ToggleZoom(hwnd, targetMon, topBarPx, dockReservePx);
     }
 
     private void EvaluatePerMonitorVisibility(ForegroundWindowInfo fg)
@@ -438,11 +517,15 @@ public partial class App : Application
                     continue;
                 }
 
-                // True fullscreen covers entire monitor bounds within 2px tolerance
-                if (w.Bounds.Left <= mon.Bounds.Left + 2
+                // True fullscreen = borderless window (!HasCaption) covering entire monitor bounds within 2px,
+                // excluding screenshot / screen-capture overlays so snipping tools never hide MenuBar & Dock.
+                // Normal maximized windows with WS_CAPTION only trigger Dock Smart Auto-Hide, NEVER hide MenuBar!
+                bool coversMonitor = w.Bounds.Left <= mon.Bounds.Left + 2
                     && w.Bounds.Top <= mon.Bounds.Top + 2
                     && w.Bounds.Right >= mon.Bounds.Right - 2
-                    && w.Bounds.Bottom >= mon.Bounds.Bottom - 2)
+                    && w.Bounds.Bottom >= mon.Bounds.Bottom - 2;
+
+                if (coversMonitor && !w.HasCaption && !w.IsCaptureOverlay)
                 {
                     monFullscreen = true;
                 }
@@ -976,6 +1059,9 @@ public partial class App : Application
     private struct POINT { public int X; public int Y; }
 
     [StructLayout(LayoutKind.Sequential)]
+    private struct RECT { public int Left, Top, Right, Bottom; }
+
+    [StructLayout(LayoutKind.Sequential)]
     private struct ANIMATIONINFO { public uint cbSize; public int iMinAnimate; }
 
     [DllImport("user32.dll")]
@@ -985,6 +1071,14 @@ public partial class App : Application
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool GetCursorPos(out POINT lpPoint);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool GetWindowRect(nint hwnd, out RECT lpRect);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetWindowPos(nint hWnd, nint hWndInsertAfter, int X, int Y, int cx, int cy, uint uFlags);
 
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]

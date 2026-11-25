@@ -8,6 +8,13 @@ using TahoeDesk.Core.Shell;
 
 namespace TahoeDesk.UI.Glass;
 
+public enum GlassBackdropSampleMode
+{
+    Direct = 0,
+    ReflectAbove = 1,
+    ReflectBelow = 2
+}
+
 public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
 {
     public static readonly DependencyProperty CornerRadiusProperty =
@@ -37,6 +44,10 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
     public static readonly DependencyProperty IsClippedBackdropProperty =
         DependencyProperty.Register(nameof(IsClippedBackdrop), typeof(bool), typeof(LiquidGlassSurface),
             new FrameworkPropertyMetadata(false, FrameworkPropertyMetadataOptions.AffectsRender));
+
+    public static readonly DependencyProperty BackdropSampleModeProperty =
+        DependencyProperty.Register(nameof(BackdropSampleMode), typeof(GlassBackdropSampleMode), typeof(LiquidGlassSurface),
+            new FrameworkPropertyMetadata(GlassBackdropSampleMode.Direct, FrameworkPropertyMetadataOptions.AffectsRender));
 
     private static readonly SolidColorBrush DarkOverlayFill;
     private static readonly SolidColorBrush LightOverlayFill;
@@ -79,6 +90,10 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
     private bool _isHooked;
     private long _lastRenderMs = -200;
     private long _firstMissMs;
+    private GlassOpacityPreset _frozenPreset;
+    private bool _frozenDarkMode;
+    private int _frozenWidthPx;
+    private int _frozenHeightPx;
     private const long MinBackdropRefreshIntervalMs = 66; // ~15 Hz staggered cap prevents AllowsTransparency PCIe readback stutter
     private const long TransientMissGraceMs = 1500; // Keep last valid glass frame across brief DXGI misses (prevents Dock flicker!)
 
@@ -148,6 +163,12 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
     {
         get => (bool)GetValue(IsClippedBackdropProperty);
         set => SetValue(IsClippedBackdropProperty, value);
+    }
+
+    public GlassBackdropSampleMode BackdropSampleMode
+    {
+        get => (GlassBackdropSampleMode)GetValue(BackdropSampleModeProperty);
+        set => SetValue(BackdropSampleModeProperty, value);
     }
 
     public void AttachSampler(DxgiBackdropSampler sampler)
@@ -228,6 +249,15 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
         int widthPx = Math.Max(4, (int)Math.Round(ActualWidth * dpiMatrix.M11));
         int heightPx = Math.Max(4, (int)Math.Round(ActualHeight * dpiMatrix.M22));
 
+        // Overlay cards lock onto the clean pre-popup DXGI frame captured when they opened so they
+        // remain 100% visible in screenshots & remote desktop with ZERO self-capture feedback loop.
+        if (IsOverlayCard && _hasValidFrame
+            && _frozenWidthPx == widthPx && _frozenHeightPx == heightPx
+            && _frozenPreset == OpacityPreset && _frozenDarkMode == IsDarkMode)
+        {
+            return;
+        }
+
         var rectPx = new ScreenRect(
             (int)Math.Round(topLeftPx.X),
             (int)Math.Round(topLeftPx.Y),
@@ -239,11 +269,18 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
         float activeBoxWidthPx = ActiveBoxWidth > 1.0 ? (float)(ActiveBoxWidth * dpiMatrix.M11) : 0f;
         var renderParams = GlassRenderParams.FromPreset(OpacityPreset, IsDarkMode, radiusPx, IsOverlayCard);
 
-        if (_renderer.RenderSurface(rectPx, renderParams, shadowPadPx, activeBoxWidthPx, DetachBackBuffer, out bool frameUpdated)
+        if (_renderer.RenderSurface(rectPx, renderParams, shadowPadPx, activeBoxWidthPx, DetachBackBuffer, out bool frameUpdated, (int)BackdropSampleMode, preferCachedFrame: IsOverlayCard)
             && _renderer.SharedD3D9SurfacePtr != 0)
         {
             _lastRenderMs = nowMs;
             _firstMissMs = 0;
+            if (IsOverlayCard)
+            {
+                _frozenWidthPx = widthPx;
+                _frozenHeightPx = heightPx;
+                _frozenPreset = OpacityPreset;
+                _frozenDarkMode = IsDarkMode;
+            }
             nint ptr = _renderer.SharedD3D9SurfacePtr;
             if (frameUpdated || _boundSurfacePtr != ptr || !_hasValidFrame)
             {

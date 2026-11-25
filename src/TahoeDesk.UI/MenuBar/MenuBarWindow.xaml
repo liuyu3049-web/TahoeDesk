@@ -23,6 +23,7 @@
         <glass:LiquidGlassSurface x:Name="BarGlassBackdrop"
                                   CornerRadius="0"
                                   ShadowPadding="0"
+                                  BackdropSampleMode="ReflectBelow"
                                   Visibility="Collapsed" />
 
         <DockPanel LastChildFill="True" Margin="8,0,10,0">

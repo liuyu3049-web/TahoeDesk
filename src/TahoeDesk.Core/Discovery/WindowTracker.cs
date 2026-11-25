@@ -22,7 +22,10 @@ public sealed class WindowTracker : IWindowTracker
     private const uint EVENT_OBJECT_HIDE = 0x8003;
     private const uint EVENT_OBJECT_NAMECHANGE = 0x800C;
 
+    private const int GWL_STYLE = -16;
     private const int GWL_EXSTYLE = -20;
+    private const int WS_CAPTION = 0x00C00000;
+    private const int WS_EX_TRANSPARENT = 0x00000020;
     private const int WS_EX_TOOLWINDOW = 0x00000080;
     private const int WS_EX_APPWINDOW = 0x00040000;
     private const int WS_EX_NOACTIVATE = 0x08000000;
@@ -97,11 +100,49 @@ public sealed class WindowTracker : IWindowTracker
 
     public void Dispose() => Stop();
 
-    public readonly record struct VisibleWindowBounds(ScreenRect Bounds, bool IsMaximized);
+    public readonly record struct VisibleWindowBounds(
+        ScreenRect Bounds,
+        bool IsMaximized,
+        bool HasCaption = true,
+        bool IsCaptureOverlay = false);
+
+    /// <summary>
+    /// Identifies screenshot / screen-capture / remote-desktop overlay windows that should never collapse
+    /// TahoeDesk's MenuBar or Dock when active.
+    /// </summary>
+    public static bool IsKnownCaptureOverlay(string className, string processName)
+    {
+        if (!string.IsNullOrEmpty(className))
+        {
+            if (className.Contains("Screenshot", StringComparison.OrdinalIgnoreCase)
+                || className.Contains("ScreenClip", StringComparison.OrdinalIgnoreCase)
+                || className.Contains("Snipping", StringComparison.OrdinalIgnoreCase)
+                || className.Contains("ScreenCapture", StringComparison.OrdinalIgnoreCase)
+                || className.Contains("CaptureOverlay", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+
+        if (!string.IsNullOrEmpty(processName))
+        {
+            return processName.Equals("ScreenClippingHost", StringComparison.OrdinalIgnoreCase)
+                || processName.Equals("SnippingTool", StringComparison.OrdinalIgnoreCase)
+                || processName.Equals("Snipaste", StringComparison.OrdinalIgnoreCase)
+                || processName.Equals("PixPin", StringComparison.OrdinalIgnoreCase)
+                || processName.Equals("ShareX", StringComparison.OrdinalIgnoreCase)
+                || processName.Equals("FSCapture", StringComparison.OrdinalIgnoreCase)
+                || processName.Equals("Greenshot", StringComparison.OrdinalIgnoreCase)
+                || processName.Equals("Flameshot", StringComparison.OrdinalIgnoreCase)
+                || processName.Equals("PicPick", StringComparison.OrdinalIgnoreCase);
+        }
+
+        return false;
+    }
 
     /// <summary>
     /// Ultra-lightweight bounds enumeration for per-monitor fullscreen/maximize checks:
-    /// zero OpenProcess, zero QueryFullProcessImageName, zero FileVersionInfo disk I/O.
+    /// zero disk I/O and only checks process name in the rare case of a large borderless window.
     /// </summary>
     public IReadOnlyList<VisibleWindowBounds> GetVisibleWindowBounds()
     {
@@ -114,7 +155,14 @@ public sealed class WindowTracker : IWindowTracker
             if (pid == 0 || pid == _selfProcessId) return true;
 
             int exStyle = GetWindowLongW(hwnd, GWL_EXSTYLE);
-            if ((exStyle & WS_EX_TOOLWINDOW) != 0 || (exStyle & WS_EX_NOACTIVATE) != 0) return true;
+            // Ignore tool windows, non-activating HUDs, and click-through transparent overlays
+            // (used by remote desktop host border/cursor overlays and screenshot annotations)
+            if ((exStyle & WS_EX_TOOLWINDOW) != 0
+                || (exStyle & WS_EX_NOACTIVATE) != 0
+                || (exStyle & WS_EX_TRANSPARENT) != 0)
+            {
+                return true;
+            }
 
             if (GetWindow(hwnd, GW_OWNER) != 0 && (exStyle & WS_EX_APPWINDOW) == 0) return true;
             if (IsCloaked(hwnd)) return true;
@@ -131,7 +179,27 @@ public sealed class WindowTracker : IWindowTracker
                 int h = rc.Bottom - rc.Top;
                 if (w > 40 && h > 40)
                 {
-                    result.Add(new VisibleWindowBounds(new ScreenRect(rc.Left, rc.Top, rc.Right, rc.Bottom), IsZoomed(hwnd)));
+                    int style = GetWindowLongW(hwnd, GWL_STYLE);
+                    bool hasCaption = (style & WS_CAPTION) == WS_CAPTION;
+                    bool isCaptureOverlay = false;
+
+                    // Only inspect process name for large borderless windows (0 overhead during normal usage)
+                    if (!hasCaption && w >= 800 && h >= 500)
+                    {
+                        string procName = string.Empty;
+                        string exe = QueryProcessPath(pid);
+                        if (!string.IsNullOrEmpty(exe))
+                        {
+                            procName = Path.GetFileNameWithoutExtension(exe);
+                        }
+                        isCaptureOverlay = IsKnownCaptureOverlay(className, procName);
+                    }
+
+                    result.Add(new VisibleWindowBounds(
+                        new ScreenRect(rc.Left, rc.Top, rc.Right, rc.Bottom),
+                        IsZoomed(hwnd),
+                        hasCaption,
+                        isCaptureOverlay));
                 }
             }
             return true;

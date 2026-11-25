@@ -150,7 +150,8 @@ public sealed class DxgiBackdropSampler : IBackdropSampler
         ScreenRect surfaceRectPx,
         out ID3D11ShaderResourceView? srv,
         out ScreenRect outputBounds,
-        out long frameVersion)
+        out long frameVersion,
+        bool preferCachedFrame = false)
     {
         srv = null;
         outputBounds = default;
@@ -185,6 +186,16 @@ public sealed class DxgiBackdropSampler : IBackdropSampler
                 }
             }
             slot ??= _outputs[0];
+
+            // Overlay cards opening over the desktop prefer the already-captured clean pre-popup frame
+            // so popups never sample themselves even without WDA_EXCLUDEFROMCAPTURE.
+            if (preferCachedFrame && slot.Srv is not null)
+            {
+                srv = slot.Srv;
+                outputBounds = slot.DesktopBounds;
+                frameVersion = slot.FrameVersion;
+                return true;
+            }
 
             IDXGIResource? desktopResource = null;
             try

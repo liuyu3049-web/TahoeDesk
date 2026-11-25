@@ -30,6 +30,7 @@
                                       HorizontalAlignment="Stretch"
                                       VerticalAlignment="Stretch"
                                       IsClippedBackdrop="True"
+                                      BackdropSampleMode="ReflectAbove"
                                       IsHitTestVisible="False"
                                       IsDarkMode="True">
                 <glass:LiquidGlassSurface.Clip>

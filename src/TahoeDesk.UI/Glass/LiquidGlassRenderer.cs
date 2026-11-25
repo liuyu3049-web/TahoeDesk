@@ -52,6 +52,7 @@ public sealed class LiquidGlassRenderer : IDisposable
     private GlassRenderParams _lastRenderedParams;
     private float _lastShadowPad;
     private float _lastActiveBoxWidthPx;
+    private int _lastSampleMode;
     private bool _disposed;
 
     public LiquidGlassRenderer(DxgiBackdropSampler sampler)
@@ -72,12 +73,14 @@ public sealed class LiquidGlassRenderer : IDisposable
         float shadowPaddingPx,
         float activeBoxWidthPx,
         Action beforeRecreateTargets,
-        out bool frameUpdated)
+        out bool frameUpdated,
+        int sampleMode = 0,
+        bool preferCachedFrame = false)
     {
         frameUpdated = false;
         if (_disposed || surfaceRectPx.Width <= 4 || surfaceRectPx.Height <= 4) return false;
 
-        if (!_sampler.TryGetOutputForRect(surfaceRectPx, out var srv, out var outputBounds, out long frameVersion)
+        if (!_sampler.TryGetOutputForRect(surfaceRectPx, out var srv, out var outputBounds, out long frameVersion, preferCachedFrame)
             || srv is null || outputBounds.Width <= 0 || outputBounds.Height <= 0)
         {
             return false;
@@ -89,7 +92,8 @@ public sealed class LiquidGlassRenderer : IDisposable
             && surfaceRectPx == _lastRenderedRect
             && glassParams == _lastRenderedParams
             && Math.Abs(shadowPaddingPx - _lastShadowPad) < 0.1f
-            && Math.Abs(activeBoxWidthPx - _lastActiveBoxWidthPx) < 0.35f)
+            && Math.Abs(activeBoxWidthPx - _lastActiveBoxWidthPx) < 0.35f
+            && sampleMode == _lastSampleMode)
         {
             return true;
         }
@@ -140,7 +144,8 @@ public sealed class LiquidGlassRenderer : IDisposable
                 TintAlpha = glassParams.TintAlpha,
                 SpecularStrength = glassParams.SpecularStrength,
                 IsDarkMode = glassParams.IsDarkMode ? 1.0f : 0.0f,
-                ActiveBoxWidthPx = activeBoxWidthPx
+                ActiveBoxWidthPx = activeBoxWidthPx,
+                SampleMode = sampleMode
             };
 
             ctx.UpdateSubresource(in cb, pipeline.ConstantBuffer);
@@ -184,6 +189,7 @@ public sealed class LiquidGlassRenderer : IDisposable
             _lastRenderedParams = glassParams;
             _lastShadowPad = shadowPaddingPx;
             _lastActiveBoxWidthPx = activeBoxWidthPx;
+            _lastSampleMode = sampleMode;
             frameUpdated = true;
             return SharedD3D9SurfacePtr != 0;
         }
@@ -343,6 +349,7 @@ public sealed class LiquidGlassRenderer : IDisposable
         public float SpecularStrength;
         public float IsDarkMode;
         public float ActiveBoxWidthPx;
-        public Vector3 _Pad;
+        public float SampleMode;
+        public Vector2 _Pad;
     }
 }

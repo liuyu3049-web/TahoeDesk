@@ -12,7 +12,6 @@ public static class WindowInteropHelperEx
     private const int GWL_EXSTYLE = -20;
     private const nint WS_EX_TOOLWINDOW = 0x00000080;
     private const nint WS_EX_NOACTIVATE = 0x08000000;
-    private const uint WDA_EXCLUDEFROMCAPTURE = 0x00000011;
 
     public static void ApplyShellOverlayStyles(nint hwnd)
     {
@@ -21,23 +20,17 @@ public static class WindowInteropHelperEx
         nint style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
         style |= WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE;
         SetWindowLongPtrW(hwnd, GWL_EXSTYLE, style);
-
-        ExcludeFromCapture(hwnd);
     }
 
+    // Intentionally kept as a no-op: WDA_EXCLUDEFROMCAPTURE hides TahoeDesk's MenuBar/Dock/Popups
+    // from Windows Snipping Tool, WeChat/Snipaste screenshots, and remote desktop apps (ToDesk/Sunlogin/RustDesk/RDP).
+    // Self-capture glass feedback is prevented directly in LiquidGlass.hlsl (adjacent reflection / frozen pre-popup frame).
     public static void ExcludeFromCapture(nint hwnd)
     {
-        if (hwnd == 0) return;
-        SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE);
     }
 
     public static void ExcludeVisualFromCapture(Visual? visual)
     {
-        if (visual is null) return;
-        if (PresentationSource.FromVisual(visual) is HwndSource src && src.Handle != 0)
-        {
-            ExcludeFromCapture(src.Handle);
-        }
     }
 
     public static bool IsSystemDarkTheme()

@@ -15,7 +15,8 @@ cbuffer GlassConstants : register(b0)
     float SpecularStrength;   // top-left rim highlight intensity
     float IsDarkMode;         // 1.0 = dark, 0.0 = light
     float ActiveBoxWidthPx;   // >0 = GPU-animated capsule width inside fixed full-width surface (zero resize!)
-    float3 _Pad;
+    float SampleMode;         // 0 = direct behind, 1 = reflect strip above (Dock), 2 = reflect strip below (MenuBar)
+    float2 _Pad;
 };
 
 struct VSOut
@@ -41,6 +42,19 @@ static const float BlurWeights[5] = { 0.204164, 0.304005, 0.093913, 0.033800, 0.
 float4 PSBlurH(VSOut inp) : SV_Target
 {
     float2 desktopUV = SurfaceRectNorm.xy + inp.UV * SurfaceRectNorm.zw;
+    if (SampleMode > 0.5 && SampleMode < 1.5)
+    {
+        // Reflect live desktop strip directly ABOVE the Dock capsule so Dock never samples itself
+        // (eliminates glass feedback loop while staying 100% visible in screenshots & remote desktop!)
+        float gapY = 2.0 / max(DesktopSize.y, 1.0);
+        desktopUV.y = SurfaceRectNorm.y - gapY - inp.UV.y * SurfaceRectNorm.w;
+    }
+    else if (SampleMode >= 1.5)
+    {
+        // Reflect live desktop strip directly BELOW the top MenuBar so MenuBar never samples itself
+        float gapY = 2.0 / max(DesktopSize.y, 1.0);
+        desktopUV.y = (SurfaceRectNorm.y + SurfaceRectNorm.w) + gapY + (1.0 - inp.UV.y) * SurfaceRectNorm.w;
+    }
     float scaleX = (BlurRadius / 7.0) / max(DesktopSize.x, 1.0);
 
     float3 sum = SourceTex.Sample(LinearClamp, saturate(desktopUV)).rgb * BlurWeights[0];
