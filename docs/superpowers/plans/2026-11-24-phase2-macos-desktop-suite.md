@@ -1,10 +1,10 @@
-# GlassShell Phase 2 (Complete macOS Desktop Suite) Implementation Plan
+# TahoeDesk Phase 2 (Complete macOS Desktop Suite) Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Deliver Phase 2 of GlassShell — single-press `Win` key Launchpad, Spotlight floating search (apps + Pinyin initials + live calculator + commands + local files), Liquid Glass Bento Control Center (Wi-Fi/Bluetooth/Volume/Brightness/WinRT Media/`Win+V`), and Dock Folder Stacks + Pre-minimize window snapshot previews.
+**Goal:** Deliver Phase 2 of TahoeDesk — single-press `Win` key Launchpad, Spotlight floating search (apps + Pinyin initials + live calculator + commands + local files), Liquid Glass Bento Control Center (Wi-Fi/Bluetooth/Volume/Brightness/WinRT Media/`Win+V`), and Dock Folder Stacks + Pre-minimize window snapshot previews.
 
-**Architecture:** All pure logic (Win-key state machine, Pinyin/fuzzy/calculator search engine, Launchpad pagination/folder model, folder stack scanner, CoreAudio/DDC-CI/WinRT control adapters, minimized snapshot LRU cache) lives in `GlassShell.Core` with zero WPF dependency and full xUnit test coverage. All Liquid Glass overlays (`LaunchpadWindow`, `SpotlightWindow`, `ControlCenterPopup`, `FolderStackPopup`) live in `GlassShell.UI`, reusing our Phase 1 `DxgiBackdropSampler`, `LiquidGlassSurface`, `OutsideClickDismissHook`, and `WDA_EXCLUDEFROMCAPTURE` foundation.
+**Architecture:** All pure logic (Win-key state machine, Pinyin/fuzzy/calculator search engine, Launchpad pagination/folder model, folder stack scanner, CoreAudio/DDC-CI/WinRT control adapters, minimized snapshot LRU cache) lives in `TahoeDesk.Core` with zero WPF dependency and full xUnit test coverage. All Liquid Glass overlays (`LaunchpadWindow`, `SpotlightWindow`, `ControlCenterPopup`, `FolderStackPopup`) live in `TahoeDesk.UI`, reusing our Phase 1 `DxgiBackdropSampler`, `LiquidGlassSurface`, `OutsideClickDismissHook`, and `WDA_EXCLUDEFROMCAPTURE` foundation.
 
 **Tech Stack:** C# / .NET 8 (`net8.0-windows10.0.22621.0`), WPF, built-in WinRT SDK projections (`Windows.Media.Control`, `Windows.Devices.Radios`), Win32 P/Invoke & COM (`WH_KEYBOARD_LL`, `RegisterHotKey`, CoreAudio `IMMDeviceEnumerator`/`IAudioEndpointVolume`, `dxva2.dll` DDC/CI, `wlanapi.dll`, `PrintWindow`), xUnit 2.9.2.
 
@@ -12,11 +12,11 @@
 
 ## Global Constraints
 
-- Target framework: `net8.0-windows10.0.22621.0`; build with local SDK (`d:\Antigravity\Mac\os\.tools\dotnet\dotnet.exe build GlassShell.sln --no-restore -m:1 /nr:false`) and verify tests (`dotnet test tests\GlassShell.Core.Tests --no-build --no-restore`).
+- Target framework: `net8.0-windows10.0.22621.0`; build with local SDK (`d:\Antigravity\Mac\os\.tools\dotnet\dotnet.exe build TahoeDesk.sln --no-restore -m:1 /nr:false`) and verify tests (`dotnet test tests\TahoeDesk.Core.Tests --no-build --no-restore`).
 - Zero DLL injection, zero admin/UAC requirement (standard Medium Integrity user), zero undocumented WNF writes.
 - Zero new external NuGet packages required (use built-in .NET 8 + Windows 10.0.22621 WinRT/COM/Win32 APIs).
 - Opinionated macOS Tahoe Liquid Glass aesthetics; keep Windows-localized branding (`Win11 Logo`, `资源管理器/此电脑`, `回收站`, `Ctrl/Alt/Shift/Win` shortcut labels).
-- Every GlassShell overlay/popup MUST apply `WDA_EXCLUDEFROMCAPTURE` to prevent DXGI self-capture feedback and use `OutsideClickDismissHook` (or `Esc`/click-empty dismissal) for reliable outside-click closing.
+- Every TahoeDesk overlay/popup MUST apply `WDA_EXCLUDEFROMCAPTURE` to prevent DXGI self-capture feedback and use `OutsideClickDismissHook` (or `Esc`/click-empty dismissal) for reliable outside-click closing.
 - Anti-Goal red line: intercepting single-press `Win` key MUST NEVER break `Win+E`, `Win+D`, `Win+L`, `Win+V`, `Win+Shift+S`, `Win+Tab`, `Win+N`, or `Win+Arrow` combos, and MUST NOT trigger during fullscreen games/videos.
 
 ## Review Focus
@@ -24,7 +24,7 @@
 1. **Held `Win` key auto-repeat & chords (`Win+E`, `Win+Shift+S`, `Win+L`, `Win+MouseClick`)**: holding `Win` fires multiple `WM_KEYDOWN` repeats before `WM_KEYUP`; any other key or mouse click during hold MUST mark the press as a chord and never trigger Launchpad or leave `Win` stuck down. (Pinned in Task 1 tests.)
 2. **Calculator false positives on plain numeric search queries**: typing `"2026"` or `"123"` in Spotlight must NOT show a bogus calculator card (`= 2026`); calculator triggers only when an operator or function is present, and division-by-zero / malformed expressions return `null` safely without throwing. (Pinned in Task 2 tests.)
 3. **Unsupported display brightness or absent Bluetooth/Wi-Fi hardware**: desktop monitors without DDC/CI or PCs without Bluetooth/Wi-Fi radios must degrade gracefully (slider disabled/hidden, radio row grayed out) instead of crashing Control Center. (Pinned in Task 3 tests.)
-4. **Minimized windows that closed or were already minimized before GlassShell launched**: `WindowSnapshotCache` must never leak GDI/bitmap entries after close, and Dock minimized items without a pre-minimize snapshot must gracefully fall back to the app's high-res icon + window title. (Pinned in Task 4 tests.)
+4. **Minimized windows that closed or were already minimized before TahoeDesk launched**: `WindowSnapshotCache` must never leak GDI/bitmap entries after close, and Dock minimized items without a pre-minimize snapshot must gracefully fall back to the app's high-res icon + window title. (Pinned in Task 4 tests.)
 5. **Launchpad folder creation/emptying & pagination boundary**: removing the last app from a Launchpad folder must dissolve the empty folder cleanly, and deleting items on the last page must clamp `CurrentPage` within valid bounds. (Pinned in Task 5 tests.)
 
 ---
@@ -32,11 +32,11 @@
 ### Task 1: Single-Press `Win` Key State Machine & Low-Level Hook + Global Hotkey
 
 **Files:**
-- Create: `src/GlassShell.Core/Shell/WinKeyStateMachine.cs`
-- Create: `src/GlassShell.Core/Shell/LowLevelWinKeyHook.cs`
-- Create: `src/GlassShell.Core/Shell/GlobalHotkeyManager.cs`
-- Modify: `src/GlassShell.Core/Config/GlassSettings.cs` (add `SpotlightHotkey` default `"Alt+Space"`)
-- Test: `tests/GlassShell.Core.Tests/Shell/WinKeyStateMachineTests.cs`
+- Create: `src/TahoeDesk.Core/Shell/WinKeyStateMachine.cs`
+- Create: `src/TahoeDesk.Core/Shell/LowLevelWinKeyHook.cs`
+- Create: `src/TahoeDesk.Core/Shell/GlobalHotkeyManager.cs`
+- Modify: `src/TahoeDesk.Core/Config/GlassSettings.cs` (add `SpotlightHotkey` default `"Alt+Space"`)
+- Test: `tests/TahoeDesk.Core.Tests/Shell/WinKeyStateMachineTests.cs`
 
 **Interfaces:**
 - Produces:
@@ -47,7 +47,7 @@
   - `LowLevelWinKeyHook` (`event Action? SingleWinPressed`, `bool Enabled`, `bool IsFullscreenActive`, `Start()`, `Dispose()`)
   - `GlobalHotkeyManager` (`Register(nint hwnd, int id, uint modifiers, uint vk)`, `ProcessWndProc(int msg, nint wParam)`, `Dispose()`)
 
-- [ ] **Step 1: Write failing tests in `tests/GlassShell.Core.Tests/Shell/WinKeyStateMachineTests.cs`**
+- [ ] **Step 1: Write failing tests in `tests/TahoeDesk.Core.Tests/Shell/WinKeyStateMachineTests.cs`**
 
 Cover:
 1. `SingleLWinPressAndRelease_TriggersLaunchpad` (down `0x5B` -> `PassThrough`, up `0x5B` -> `SuppressStartAndTrigger`)
@@ -59,7 +59,7 @@ Cover:
 
 - [ ] **Step 2: Run test to verify it fails**
 
-Run: `dotnet build GlassShell.sln --no-restore -m:1 /nr:false`
+Run: `dotnet build TahoeDesk.sln --no-restore -m:1 /nr:false`
 Expected: FAIL (`WinKeyStateMachine` not found).
 
 - [ ] **Step 3: Implement `WinKeyStateMachine.cs`, `LowLevelWinKeyHook.cs`, `GlobalHotkeyManager.cs`, and add `SpotlightHotkey` to `GlassSettings.cs`**
@@ -83,12 +83,12 @@ Commit message: `feat(shell): add single-press Win key state machine, LL hook, a
 ### Task 2: Installed App Scanner, Offline Pinyin Initials, Instant Calculator & Spotlight Search Engine
 
 **Files:**
-- Create: `src/GlassShell.Core/Discovery/InstalledAppScanner.cs`
-- Create: `src/GlassShell.Core/Search/PinyinInitials.cs`
-- Create: `src/GlassShell.Core/Search/InstantCalculator.cs`
-- Create: `src/GlassShell.Core/Search/SpotlightModels.cs`
-- Create: `src/GlassShell.Core/Search/SpotlightSearchEngine.cs`
-- Test: `tests/GlassShell.Core.Tests/Search/SpotlightSearchTests.cs`
+- Create: `src/TahoeDesk.Core/Discovery/InstalledAppScanner.cs`
+- Create: `src/TahoeDesk.Core/Search/PinyinInitials.cs`
+- Create: `src/TahoeDesk.Core/Search/InstantCalculator.cs`
+- Create: `src/TahoeDesk.Core/Search/SpotlightModels.cs`
+- Create: `src/TahoeDesk.Core/Search/SpotlightSearchEngine.cs`
+- Test: `tests/TahoeDesk.Core.Tests/Search/SpotlightSearchTests.cs`
 
 **Interfaces:**
 - Produces:
@@ -100,7 +100,7 @@ Commit message: `feat(shell): add single-press Win key state machine, LL hook, a
   - `SpotlightResult(SpotlightResultKind Kind, string Id, string Title, string Subtitle, string Payload, int Score)`
   - `SpotlightSearchEngine.Search(string query, IReadOnlyList<InstalledAppEntry> apps, IReadOnlyList<IndexedFileEntry> files) -> IReadOnlyList<SpotlightResult>`
 
-- [ ] **Step 1: Write failing tests in `tests/GlassShell.Core.Tests/Search/SpotlightSearchTests.cs`**
+- [ ] **Step 1: Write failing tests in `tests/TahoeDesk.Core.Tests/Search/SpotlightSearchTests.cs`**
 
 Cover:
 1. `PinyinInitials_MapsCommonChineseAppNames` (`"微信"` -> `"wx"`, `"设置"` -> `"sz"`, `"计算器"` -> `"jsq"`, `"VS Code"` -> `"vsc"` / `"vscode"`)
@@ -120,12 +120,12 @@ Commit message: `feat(search): add offline Pinyin matcher, instant calculator, a
 ### Task 3: System Control Adapters (CoreAudio Volume, Brightness DDC/CI+LCD, WinRT Wi-Fi/Bluetooth & SMTC Media)
 
 **Files:**
-- Create: `src/GlassShell.Core/SystemControl/SystemControlModels.cs`
-- Create: `src/GlassShell.Core/SystemControl/AudioControlService.cs`
-- Create: `src/GlassShell.Core/SystemControl/BrightnessControlService.cs`
-- Create: `src/GlassShell.Core/SystemControl/RadioControlService.cs`
-- Create: `src/GlassShell.Core/SystemControl/MediaSessionService.cs`
-- Test: `tests/GlassShell.Core.Tests/SystemControl/SystemControlTests.cs`
+- Create: `src/TahoeDesk.Core/SystemControl/SystemControlModels.cs`
+- Create: `src/TahoeDesk.Core/SystemControl/AudioControlService.cs`
+- Create: `src/TahoeDesk.Core/SystemControl/BrightnessControlService.cs`
+- Create: `src/TahoeDesk.Core/SystemControl/RadioControlService.cs`
+- Create: `src/TahoeDesk.Core/SystemControl/MediaSessionService.cs`
+- Test: `tests/TahoeDesk.Core.Tests/SystemControl/SystemControlTests.cs`
 
 **Interfaces:**
 - Produces:
@@ -138,7 +138,7 @@ Commit message: `feat(search): add offline Pinyin matcher, instant calculator, a
   - `MediaSessionInfo(bool HasMedia, string Title, string Artist, bool IsPlaying, byte[]? ThumbnailBytes)`
   - `MediaSessionService`: `GetCurrentMediaAsync()`, `TogglePlayPauseAsync()`, `NextTrackAsync()`, `PreviousTrackAsync()` (WinRT `GlobalSystemMediaTransportControlsSessionManager`)
 
-- [ ] **Step 1: Write failing tests in `tests/GlassShell.Core.Tests/SystemControl/SystemControlTests.cs`**
+- [ ] **Step 1: Write failing tests in `tests/TahoeDesk.Core.Tests/SystemControl/SystemControlTests.cs`**
 
 Cover:
 1. `ClampPercent_EnforcesZeroToHundredBounds`
@@ -158,16 +158,16 @@ Commit message: `feat(control): add CoreAudio, DDC/CI brightness, WinRT radio, a
 ### Task 4: Dock Folder Stacks & Pre-Minimize Window Snapshot Cache
 
 **Files:**
-- Create: `src/GlassShell.Core/Discovery/FolderStackScanner.cs`
-- Create: `src/GlassShell.Core/Discovery/WindowSnapshotCache.cs`
-- Create: `src/GlassShell.UI/Dock/FolderStackPopup.xaml`
-- Create: `src/GlassShell.UI/Dock/FolderStackPopup.xaml.cs`
-- Create: `src/GlassShell.UI/Dock/WindowThumbnailCapturer.cs`
-- Modify: `src/GlassShell.Core/Discovery/WindowModels.cs` (add `DockItemKind.MinimizedWindow`, `WindowHandle` on `DockItemModel`)
-- Modify: `src/GlassShell.Core/Discovery/DockModelCoordinator.cs` (add minimized windows to `RightStorage` section)
-- Modify: `src/GlassShell.Core/Discovery/IWindowTracker.cs` & `WindowTracker.cs` (hook `EVENT_SYSTEM_MINIMIZESTART` `0x0016` -> `event Action<nint>? WindowMinimizing`)
-- Modify: `src/GlassShell.UI/Dock/DockWindow.xaml.cs` (open `FolderStackPopup` on folder click, render cached snapshot thumbnails on `MinimizedWindow` items, click to restore)
-- Test: `tests/GlassShell.Core.Tests/Discovery/FolderStackAndSnapshotTests.cs`
+- Create: `src/TahoeDesk.Core/Discovery/FolderStackScanner.cs`
+- Create: `src/TahoeDesk.Core/Discovery/WindowSnapshotCache.cs`
+- Create: `src/TahoeDesk.UI/Dock/FolderStackPopup.xaml`
+- Create: `src/TahoeDesk.UI/Dock/FolderStackPopup.xaml.cs`
+- Create: `src/TahoeDesk.UI/Dock/WindowThumbnailCapturer.cs`
+- Modify: `src/TahoeDesk.Core/Discovery/WindowModels.cs` (add `DockItemKind.MinimizedWindow`, `WindowHandle` on `DockItemModel`)
+- Modify: `src/TahoeDesk.Core/Discovery/DockModelCoordinator.cs` (add minimized windows to `RightStorage` section)
+- Modify: `src/TahoeDesk.Core/Discovery/IWindowTracker.cs` & `WindowTracker.cs` (hook `EVENT_SYSTEM_MINIMIZESTART` `0x0016` -> `event Action<nint>? WindowMinimizing`)
+- Modify: `src/TahoeDesk.UI/Dock/DockWindow.xaml.cs` (open `FolderStackPopup` on folder click, render cached snapshot thumbnails on `MinimizedWindow` items, click to restore)
+- Test: `tests/TahoeDesk.Core.Tests/Discovery/FolderStackAndSnapshotTests.cs`
 
 **Interfaces:**
 - Produces:
@@ -176,7 +176,7 @@ Commit message: `feat(control): add CoreAudio, DDC/CI brightness, WinRT radio, a
   - `WindowSnapshotCache<TBitmap>` (`Put(nint hwnd, TBitmap bmp)`, `TryGet(nint hwnd, out TBitmap? bmp)`, `Remove(nint hwnd)`, `Prune(IReadOnlySet<nint> aliveHwnds)`)
   - `FolderStackPopup` (Tahoe Liquid Glass 4-column grid popover with file icons, click-to-open, `"在资源管理器中打开"` footer, `OutsideClickDismissHook`)
 
-- [ ] **Step 1: Write failing tests in `tests/GlassShell.Core.Tests/Discovery/FolderStackAndSnapshotTests.cs`**
+- [ ] **Step 1: Write failing tests in `tests/TahoeDesk.Core.Tests/Discovery/FolderStackAndSnapshotTests.cs`**
 
 Cover:
 1. `FolderStackScanner_SortsNewestFirstAndRespectsMaxItems` (temp dir with files of different timestamps + nonexistent dir returns empty)
@@ -195,19 +195,19 @@ Commit message: `feat(dock): add Liquid Glass folder stacks and pre-minimize win
 ### Task 5: Launchpad Model, Pagination/Folders & Fullscreen Blurred UI
 
 **Files:**
-- Create: `src/GlassShell.Core/Launchpad/LaunchpadModels.cs`
-- Create: `src/GlassShell.Core/Launchpad/LaunchpadLayoutManager.cs`
-- Create: `src/GlassShell.UI/Launchpad/LaunchpadWindow.xaml`
-- Create: `src/GlassShell.UI/Launchpad/LaunchpadWindow.xaml.cs`
-- Test: `tests/GlassShell.Core.Tests/Launchpad/LaunchpadLayoutTests.cs`
+- Create: `src/TahoeDesk.Core/Launchpad/LaunchpadModels.cs`
+- Create: `src/TahoeDesk.Core/Launchpad/LaunchpadLayoutManager.cs`
+- Create: `src/TahoeDesk.UI/Launchpad/LaunchpadWindow.xaml`
+- Create: `src/TahoeDesk.UI/Launchpad/LaunchpadWindow.xaml.cs`
+- Test: `tests/TahoeDesk.Core.Tests/Launchpad/LaunchpadLayoutTests.cs`
 
 **Interfaces:**
 - Produces:
   - `LaunchpadEntry(string Id, string Title, bool IsFolder, string? LaunchTarget, string? IconPath, IReadOnlyList<LaunchpadEntry> Children)`
-  - `LaunchpadLayoutManager` (`ItemsPerPage = 35` 7×5 grid, `SyncWithInstalledApps`, `GetPage`, `PageCount`, `Filter(query)`, `MergeIntoFolder(sourceId, targetId)`, `RemoveFromFolder(folderId, childId)`, `Reorder(sourceId, targetId)`, JSON persistence `%LocalAppData%\GlassShell\launchpad.json`)
+  - `LaunchpadLayoutManager` (`ItemsPerPage = 35` 7×5 grid, `SyncWithInstalledApps`, `GetPage`, `PageCount`, `Filter(query)`, `MergeIntoFolder(sourceId, targetId)`, `RemoveFromFolder(folderId, childId)`, `Reorder(sourceId, targetId)`, JSON persistence `%LocalAppData%\TahoeDesk\launchpad.json`)
   - `LaunchpadWindow` (`ToggleOnMonitor(MonitorContext, IReadOnlyList<InstalledAppEntry>)`, smooth scale+fade animation, DXGI full-screen blur backdrop, centered search pill, 7×5 paginated grid, scroll/arrow page switch, page dots, drag-to-reorder & drag-to-folder, inline Liquid Glass folder popup, click-empty/`Esc`/`Win` dismiss)
 
-- [ ] **Step 1: Write failing tests in `tests/GlassShell.Core.Tests/Launchpad/LaunchpadLayoutTests.cs`**
+- [ ] **Step 1: Write failing tests in `tests/TahoeDesk.Core.Tests/Launchpad/LaunchpadLayoutTests.cs`**
 
 Cover:
 1. `Pagination_ComputesExact7x5PagesAndClampsIndex` (72 apps -> 3 pages: 35, 35, 2)
@@ -228,8 +228,8 @@ Commit message: `feat(launchpad): add paginated 7x5 fullscreen blurred Launchpad
 ### Task 6: Spotlight Centered Floating Liquid Glass Search UI
 
 **Files:**
-- Create: `src/GlassShell.UI/Spotlight/SpotlightWindow.xaml`
-- Create: `src/GlassShell.UI/Spotlight/SpotlightWindow.xaml.cs`
+- Create: `src/TahoeDesk.UI/Spotlight/SpotlightWindow.xaml`
+- Create: `src/TahoeDesk.UI/Spotlight/SpotlightWindow.xaml.cs`
 
 **Interfaces:**
 - Consumes: `SpotlightSearchEngine`, `InstalledAppEntry`, `DxgiBackdropSampler`, `GlassSettings`
@@ -250,8 +250,8 @@ Commit message: `feat(spotlight): add centered Liquid Glass Spotlight search wit
 ### Task 7: Control Center Liquid Glass Bento Popup
 
 **Files:**
-- Create: `src/GlassShell.UI/ControlCenter/ControlCenterPopup.xaml`
-- Create: `src/GlassShell.UI/ControlCenter/ControlCenterPopup.xaml.cs`
+- Create: `src/TahoeDesk.UI/ControlCenter/ControlCenterPopup.xaml`
+- Create: `src/TahoeDesk.UI/ControlCenter/ControlCenterPopup.xaml.cs`
 
 **Interfaces:**
 - Consumes: `AudioControlService`, `BrightnessControlService`, `RadioControlService`, `MediaSessionService`, `DxgiBackdropSampler`, `OutsideClickDismissHook`
@@ -275,17 +275,17 @@ Commit message: `feat(control-center): add Liquid Glass Bento Control Center wit
 ### Task 8: Full Phase 2 Shell Integration, QuickSettings Toggle & Final Verification
 
 **Files:**
-- Modify: `src/GlassShell.UI/App.xaml.cs` (wire `LowLevelWinKeyHook`, `GlobalHotkeyManager` `Alt+Space`, `InstalledAppScanner` background index, `LaunchpadWindow`, `SpotlightWindow`, `ControlCenterPopup`, `WindowSnapshotCache`, system commands from Spotlight, clean unhooking on exit)
-- Modify: `src/GlassShell.UI/MenuBar/MenuBarWindow.xaml.cs` (wire Control Center button directly to `ControlCenterPopup`, dismiss Control Center with other popups, register `Alt+Space` hotkey on primary `MenuBarWindow.Hwnd`)
-- Modify: `src/GlassShell.UI/Settings/QuickSettingsWindow.xaml` & `.cs` (add `"单按 Win 键呼出启动台"` toggle bound to `InterceptWinKeyForLaunchpad`)
+- Modify: `src/TahoeDesk.UI/App.xaml.cs` (wire `LowLevelWinKeyHook`, `GlobalHotkeyManager` `Alt+Space`, `InstalledAppScanner` background index, `LaunchpadWindow`, `SpotlightWindow`, `ControlCenterPopup`, `WindowSnapshotCache`, system commands from Spotlight, clean unhooking on exit)
+- Modify: `src/TahoeDesk.UI/MenuBar/MenuBarWindow.xaml.cs` (wire Control Center button directly to `ControlCenterPopup`, dismiss Control Center with other popups, register `Alt+Space` hotkey on primary `MenuBarWindow.Hwnd`)
+- Modify: `src/TahoeDesk.UI/Settings/QuickSettingsWindow.xaml` & `.cs` (add `"单按 Win 键呼出启动台"` toggle bound to `InterceptWinKeyForLaunchpad`)
 
 - [ ] **Step 1: Integrate all Phase 2 subsystems into `App.xaml.cs`, `MenuBarWindow.xaml.cs`, and `QuickSettingsWindow`**
   - Remove Phase 1 `ShowPhase2Notice` placeholder calls.
   - Ensure `LowLevelWinKeyHook.IsFullscreenActive` tracks `TaskbarController` fullscreen state so `Win` key is never intercepted during fullscreen games/videos.
   - Ensure `CleanupSafe()` unhooks `LowLevelWinKeyHook` and unregisters `GlobalHotkeyManager` before exiting.
 - [ ] **Step 2: Run full build & full test suite**
-  - Run: `dotnet build GlassShell.sln --no-restore -m:1 /nr:false --verbosity minimal` (0 warnings, 0 errors)
-  - Run: `dotnet test tests\GlassShell.Core.Tests --no-build --no-restore --verbosity minimal` (all Phase 1 + Phase 2 tests PASS)
+  - Run: `dotnet build TahoeDesk.sln --no-restore -m:1 /nr:false --verbosity minimal` (0 warnings, 0 errors)
+  - Run: `dotnet test tests\TahoeDesk.Core.Tests --no-build --no-restore --verbosity minimal` (all Phase 1 + Phase 2 tests PASS)
 - [ ] **Step 3: Commit**
 
-Commit message: `feat(shell): integrate Launchpad, Spotlight, Control Center, and Dock stacks into GlassShell`
+Commit message: `feat(shell): integrate Launchpad, Spotlight, Control Center, and Dock stacks into TahoeDesk`

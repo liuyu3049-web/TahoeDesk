@@ -1,0 +1,120 @@
+<Window x:Class="TahoeDesk.UI.Spotlight.SpotlightWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:glass="clr-namespace:TahoeDesk.UI.Glass"
+        Title="TahoeDesk Spotlight"
+        Width="712"
+        SizeToContent="Height"
+        WindowStyle="None"
+        AllowsTransparency="True"
+        Background="Transparent"
+        ResizeMode="NoResize"
+        ShowInTaskbar="False"
+        Topmost="True"
+        TextOptions.TextFormattingMode="Ideal"
+        TextOptions.TextRenderingMode="Grayscale"
+        PreviewKeyDown="OnWindowPreviewKeyDown"
+        Deactivated="OnWindowDeactivated">
+    <Grid>
+        <glass:LiquidGlassSurface x:Name="GlassBackdrop"
+                                  CornerRadius="18"
+                                  ShadowPadding="16"
+                                  IsOverlayCard="True"
+                                  IsDarkMode="True" />
+
+        <StackPanel Margin="26,22,26,22">
+            <!-- Top Search Input Bar -->
+            <DockPanel Height="44">
+                <TextBlock Text="⌕"
+                           FontSize="22"
+                           Foreground="{DynamicResource SpotSubtleBrush}"
+                           VerticalAlignment="Center"
+                           Margin="4,0,12,2" />
+                <TextBlock x:Name="HotkeyBadge"
+                           DockPanel.Dock="Right"
+                           Text="Esc 关闭"
+                           FontSize="11"
+                           FontFamily="Microsoft YaHei UI, Segoe UI"
+                           Foreground="{DynamicResource SpotSubtleBrush}"
+                           VerticalAlignment="Center"
+                           Margin="8,0,4,0" />
+                <Grid VerticalAlignment="Center">
+                    <TextBlock x:Name="PlaceholderText"
+                               Text="聚焦搜索：应用、拼音首字母、算式、系统命令或文件…"
+                               FontSize="17"
+                               FontFamily="Microsoft YaHei UI, Segoe UI"
+                               Foreground="{DynamicResource SpotSubtleBrush}"
+                               IsHitTestVisible="False"
+                               VerticalAlignment="Center" />
+                    <TextBox x:Name="QueryBox"
+                             Background="Transparent"
+                             BorderThickness="0"
+                             Foreground="{DynamicResource SpotFgBrush}"
+                             CaretBrush="{DynamicResource SpotFgBrush}"
+                             FontSize="17"
+                             FontFamily="Microsoft YaHei UI, Segoe UI"
+                             VerticalContentAlignment="Center"
+                             PreviewKeyDown="OnWindowPreviewKeyDown"
+                             TextChanged="OnQueryTextChanged" />
+                </Grid>
+            </DockPanel>
+
+            <!-- Dual-Pane Results Container (auto-expands when query is non-empty) -->
+            <Grid x:Name="ResultsPane" Visibility="Collapsed" Margin="0,10,0,2">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="348" />
+                </Grid.RowDefinitions>
+
+                <Border Grid.Row="0" Height="1" Background="{DynamicResource SpotDividerBrush}" Margin="0,0,0,10" />
+
+                <Grid Grid.Row="1">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="320" />
+                        <ColumnDefinition Width="1" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+
+                    <!-- Left: Ranked Results List -->
+                    <ScrollViewer Grid.Column="0" VerticalScrollBarVisibility="Auto" Margin="0,0,8,0">
+                        <StackPanel x:Name="ResultsListPanel" />
+                    </ScrollViewer>
+
+                    <Border Grid.Column="1" Background="{DynamicResource SpotDividerBrush}" />
+
+                    <!-- Right: Live Detail Preview Pane -->
+                    <Grid Grid.Column="2" Margin="18,6,6,6">
+                        <StackPanel x:Name="PreviewContent" VerticalAlignment="Center" HorizontalAlignment="Center" Width="284">
+                            <ContentControl x:Name="PreviewIconHost" HorizontalAlignment="Center" Margin="0,0,0,14" />
+                            <TextBlock x:Name="PreviewTitle"
+                                       FontSize="20"
+                                       FontWeight="SemiBold"
+                                       FontFamily="Microsoft YaHei UI, Segoe UI"
+                                       Foreground="{DynamicResource SpotFgBrush}"
+                                       TextAlignment="Center"
+                                       TextWrapping="Wrap" />
+                            <TextBlock x:Name="PreviewSubtitle"
+                                       FontSize="12"
+                                       FontFamily="Microsoft YaHei UI, Segoe UI"
+                                       Foreground="{DynamicResource SpotSubtleBrush}"
+                                       TextAlignment="Center"
+                                       TextWrapping="Wrap"
+                                       Margin="0,8,0,0" />
+                            <Border Margin="0,18,0,0"
+                                    Padding="10,6"
+                                    CornerRadius="8"
+                                    Background="{DynamicResource SpotBadgeBgBrush}"
+                                    HorizontalAlignment="Center">
+                                <TextBlock x:Name="PreviewHint"
+                                           Text="Enter 打开 · Ctrl+Enter 显示位置"
+                                           FontSize="11"
+                                           FontFamily="Microsoft YaHei UI, Segoe UI"
+                                           Foreground="{DynamicResource SpotSubtleBrush}" />
+                            </Border>
+                        </StackPanel>
+                    </Grid>
+                </Grid>
+            </Grid>
+        </StackPanel>
+    </Grid>
+</Window>

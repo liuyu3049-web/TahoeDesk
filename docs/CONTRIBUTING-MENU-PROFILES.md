@@ -7,7 +7,7 @@ TahoeDesk 顶部菜单栏采用「三级绝对静默」策略：
 
 ## 如何新增一个应用菜单配置
 
-1. 在 `src/GlassShell.Core/MenuEngine/Assets/MenuProfiles/` 目录中新建或编辑 `<appname>.json`。
+1. 在 `src/TahoeDesk.Core/MenuEngine/Assets/MenuProfiles/` 目录中新建或编辑 `<appname>.json`。
 2. JSON 结构示例：
 
 ```json
@@ -44,5 +44,5 @@ TahoeDesk 顶部菜单栏采用「三级绝对静默」策略：
 4. 运行单元测试确认 JSON 解析与加载通过：
 
 ```powershell
-dotnet test tests/GlassShell.Core.Tests
+dotnet test tests/TahoeDesk.Core.Tests
 ```

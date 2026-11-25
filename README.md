@@ -3,7 +3,7 @@
 **TahoeDesk** 是一款面向 Windows 11 的轻量级 **macOS Tahoe (26+) 液态玻璃（Liquid Glass）** 桌面壳，采用纯 C# `.NET 8` + WPF + DXGI / Direct3D 11 HLSL 着色器实现。
 
 - **零 DLL 注入**：不注入 `explorer.exe` 或任何第三方进程，不修改系统文件，无需管理员权限。
-- **看门狗自愈保护**：独立 `GlassShell.Watchdog.exe` 守护进程，异常崩溃或强杀时毫秒级自动恢复 Windows 原生任务栏与自动隐藏状态。
+- **看门狗自愈保护**：独立 `TahoeDesk.Watchdog.exe` 守护进程，异常崩溃或强杀时毫秒级自动恢复 Windows 原生任务栏与自动隐藏状态。
 - **低占用高流畅**：共享单次编译的 D3D11 HLSL 液态玻璃管线、弹窗关闭自动释放显存、统一图标缓存、常规常驻内存约 **80 MB**。
 
 ---
@@ -50,10 +50,10 @@
 
 ```powershell
 # 1. 构建 Release
-dotnet build GlassShell.sln -c Release
+dotnet build TahoeDesk.sln -c Release
 
 # 2. 运行单元测试
-dotnet test tests/GlassShell.Core.Tests -c Release --no-build
+dotnet test tests/TahoeDesk.Core.Tests -c Release --no-build
 
 # 3. 打包绿色便携版 ZIP（输出到 dist/TahoeDesk-v1.0.0-win-x64-portable.zip）
 .\scripts\build-portable.ps1
@@ -69,7 +69,7 @@ dotnet test tests/GlassShell.Core.Tests -c Release --no-build
 TahoeDesk 正常退出或异常崩溃时均会自动恢复原生任务栏。如遇极端情况，可运行便携包根目录的 `RestoreTaskbar.cmd` 或执行：
 
 ```powershell
-GlassShell.UI.exe --restore-taskbar
+TahoeDesk.exe --restore-taskbar
 ```
 
 ---

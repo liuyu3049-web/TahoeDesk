@@ -1,10 +1,10 @@
-# GlassShell Phase 1 (Core Shell MVP) Implementation Plan
+# TahoeDesk Phase 1 (Core Shell MVP) Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Deliver Phase 1 (Daily-Driver MVP) of GlassShell — a Windows 11 macOS Tahoe Liquid Glass desktop shell featuring safe native taskbar hiding with crash watchdog recovery, top 28 DIP AppBar reservation, DXGI/D3D11 real-time optical refraction Liquid Glass rendering, an absolute-silent 3-tier foreground app Menu Bar with mini calendar card, and a Gaussian-magnified Bottom Dock with bounce physics, tooltips, drag-and-drop, Recycle Bin, and fullscreen auto-yield.
+**Goal:** Deliver Phase 1 (Daily-Driver MVP) of TahoeDesk — a Windows 11 macOS Tahoe Liquid Glass desktop shell featuring safe native taskbar hiding with crash watchdog recovery, top 28 DIP AppBar reservation, DXGI/D3D11 real-time optical refraction Liquid Glass rendering, an absolute-silent 3-tier foreground app Menu Bar with mini calendar card, and a Gaussian-magnified Bottom Dock with bounce physics, tooltips, drag-and-drop, Recycle Bin, and fullscreen auto-yield.
 
-**Architecture:** Clean 3-project `.NET 8` (`net8.0-windows10.0.22621.0`) solution separating pure Windows interop/domain logic (`GlassShell.Core`, zero WPF dependencies, unit-tested via `xUnit`) from the WPF + DXGI/D3D11 HLSL presentation layer (`GlassShell.UI`) and an isolated zero-CPU crash recovery process (`GlassShell.Watchdog`). Phase 2 (Win-key Launchpad, Spotlight, Control Center, Dock Stacks & pre-minimize snapshots) and Phase 3 (Wallpaper luminance auto-ink, Icon Squircle harmonizer, full Settings UI & portable packaging) will follow in dedicated plans once Phase 1 runs reliably on Windows 11.
+**Architecture:** Clean 3-project `.NET 8` (`net8.0-windows10.0.22621.0`) solution separating pure Windows interop/domain logic (`TahoeDesk.Core`, zero WPF dependencies, unit-tested via `xUnit`) from the WPF + DXGI/D3D11 HLSL presentation layer (`TahoeDesk.UI`) and an isolated zero-CPU crash recovery process (`TahoeDesk.Watchdog`). Phase 2 (Win-key Launchpad, Spotlight, Control Center, Dock Stacks & pre-minimize snapshots) and Phase 3 (Wallpaper luminance auto-ink, Icon Squircle harmonizer, full Settings UI & portable packaging) will follow in dedicated plans once Phase 1 runs reliably on Windows 11.
 
 **Tech Stack:** C# 12, .NET 8 SDK (`net8.0-windows10.0.22621.0`), WPF, `Vortice.Direct3D11`, `Vortice.DXGI`, `Vortice.D3DCompiler`, `Interop.UIAutomationClient` (COM UIA), `CommunityToolkit.Mvvm`, `xUnit`.
 
@@ -28,26 +28,26 @@
 1. **Explorer restart (`TaskbarCreated`) or Windows notification popping `Shell_TrayWnd` back up** — `TaskbarController` must automatically re-hide `Shell_TrayWnd` whenever `IsTrayPeekActive == false`, never re-hide while `IsTrayPeekActive == true`, and idempotently restore on release. *(Pinned in Task 2)*
 2. **Rapid `Alt+Tab` storms, hung apps (>200ms UIA stall), or elevated Admin foreground windows (UIPI `E_ACCESSDENIED`)** — `ForegroundMenuCoordinator` must cancel stale probes immediately, trip the 200ms timeout fuse, catch UIPI exceptions, and cleanly return Tier 3 fallback menus. *(Pinned in Task 4)*
 3. **DXGI `DXGI_ERROR_ACCESS_LOST` on UAC secure desktop, lock screen (`Win+L`), RDP, or display/DPI change** — `DxgiBackdropSampler` must degrade gracefully to translucent tint fallback without crashing and auto-reacquire desktop duplication with backoff. *(Pinned in Task 5)*
-4. **Menu Bar / Dock focus steal** — Clicking GlassShell's own top menu bar or Dock must never overwrite the tracked foreground app HWND with GlassShell's own process or prevent dispatching menu commands to the previous foreground app. *(Pinned in Task 4 & Task 6)*
+4. **Menu Bar / Dock focus steal** — Clicking TahoeDesk's own top menu bar or Dock must never overwrite the tracked foreground app HWND with TahoeDesk's own process or prevent dispatching menu commands to the previous foreground app. *(Pinned in Task 4 & Task 6)*
 5. **Fullscreen game/video detection vs. desktop wallpaper windows (`Progman`/`WorkerW`)** — `FullscreenDetector` must never treat desktop windows as fullscreen, must hide both bars on real fullscreen apps, and must cancel active tray peek on fullscreen entry. *(Pinned in Task 2)*
 
 ---
 
 ## File Structure Overview
 
-- `GlassShell.sln`, `.gitignore` — Solution & Git hygiene
-- `src/GlassShell.Core/Config/` — `GlassSettings.cs`, `JsonSettingsStore.cs`
-- `src/GlassShell.Core/Shell/` — `ITaskbarNative.cs`, `Win32TaskbarNative.cs`, `TaskbarController.cs`, `FullscreenDetector.cs`, `MonitorContext.cs`
-- `src/GlassShell.Core/Discovery/` — `WindowModels.cs`, `IWindowTracker.cs`, `WindowTracker.cs`, `IconExtractor.cs`, `RecycleBinService.cs`, `DockModelCoordinator.cs`
-- `src/GlassShell.Core/MenuEngine/` — `MenuModels.cs`, `IMenuExtractor.cs`, `Win32GetMenuExtractor.cs`, `StaticUiaMenuExtractor.cs`, `JsonProfileMenuProvider.cs`, `ForegroundMenuCoordinator.cs`, `Assets/MenuProfiles/*.json`
-- `src/GlassShell.Core/DockPhysics/` — `DockMagnificationCalculator.cs`, `SpringBounceAnimator.cs`, `DockAutoHideController.cs`
-- `src/GlassShell.Core/SystemStatus/` — `SystemStatusModels.cs`, `SystemStatusProvider.cs` (IME, Battery, Network, Chinese clock formatting)
-- `src/GlassShell.Watchdog/` — `Program.cs` (parent-PID monitor + `--restore-taskbar` recovery)
-- `src/GlassShell.UI/Glass/` — `GlassRenderParams.cs`, `IBackdropSampler.cs`, `DxgiBackdropSampler.cs`, `LiquidGlassRenderer.cs`, `Shaders/LiquidGlass.hlsl`, `LiquidGlassSurface.cs`, `WindowInteropHelperEx.cs`
-- `src/GlassShell.UI/MenuBar/` — `MenuBarWindow.xaml(.cs)`, `MenuBarViewModel.cs`, `LiquidGlassMenuPopup.xaml(.cs)`, `CalendarPopup.xaml(.cs)`, `AboutMacDialog.xaml(.cs)`, `ForceQuitWindow.xaml(.cs)`
-- `src/GlassShell.UI/Dock/` — `DockWindow.xaml(.cs)`, `DockViewModel.cs`, `DockTooltipPopup.xaml(.cs)`, `DockContextMenu.cs`
-- `src/GlassShell.UI/` — `App.xaml(.cs)`, `Themes/LiquidGlassStyles.xaml`
-- `tests/GlassShell.Core.Tests/` — Unit tests per Core subsystem
+- `TahoeDesk.sln`, `.gitignore` — Solution & Git hygiene
+- `src/TahoeDesk.Core/Config/` — `GlassSettings.cs`, `JsonSettingsStore.cs`
+- `src/TahoeDesk.Core/Shell/` — `ITaskbarNative.cs`, `Win32TaskbarNative.cs`, `TaskbarController.cs`, `FullscreenDetector.cs`, `MonitorContext.cs`
+- `src/TahoeDesk.Core/Discovery/` — `WindowModels.cs`, `IWindowTracker.cs`, `WindowTracker.cs`, `IconExtractor.cs`, `RecycleBinService.cs`, `DockModelCoordinator.cs`
+- `src/TahoeDesk.Core/MenuEngine/` — `MenuModels.cs`, `IMenuExtractor.cs`, `Win32GetMenuExtractor.cs`, `StaticUiaMenuExtractor.cs`, `JsonProfileMenuProvider.cs`, `ForegroundMenuCoordinator.cs`, `Assets/MenuProfiles/*.json`
+- `src/TahoeDesk.Core/DockPhysics/` — `DockMagnificationCalculator.cs`, `SpringBounceAnimator.cs`, `DockAutoHideController.cs`
+- `src/TahoeDesk.Core/SystemStatus/` — `SystemStatusModels.cs`, `SystemStatusProvider.cs` (IME, Battery, Network, Chinese clock formatting)
+- `src/TahoeDesk.Watchdog/` — `Program.cs` (parent-PID monitor + `--restore-taskbar` recovery)
+- `src/TahoeDesk.UI/Glass/` — `GlassRenderParams.cs`, `IBackdropSampler.cs`, `DxgiBackdropSampler.cs`, `LiquidGlassRenderer.cs`, `Shaders/LiquidGlass.hlsl`, `LiquidGlassSurface.cs`, `WindowInteropHelperEx.cs`
+- `src/TahoeDesk.UI/MenuBar/` — `MenuBarWindow.xaml(.cs)`, `MenuBarViewModel.cs`, `LiquidGlassMenuPopup.xaml(.cs)`, `CalendarPopup.xaml(.cs)`, `AboutMacDialog.xaml(.cs)`, `ForceQuitWindow.xaml(.cs)`
+- `src/TahoeDesk.UI/Dock/` — `DockWindow.xaml(.cs)`, `DockViewModel.cs`, `DockTooltipPopup.xaml(.cs)`, `DockContextMenu.cs`
+- `src/TahoeDesk.UI/` — `App.xaml(.cs)`, `Themes/LiquidGlassStyles.xaml`
+- `tests/TahoeDesk.Core.Tests/` — Unit tests per Core subsystem
 
 ---
 
@@ -55,14 +55,14 @@
 
 **Files:**
 - Create: `.gitignore`
-- Create: `GlassShell.sln`
-- Create: `src/GlassShell.Core/GlassShell.Core.csproj`
-- Create: `src/GlassShell.UI/GlassShell.UI.csproj`
-- Create: `src/GlassShell.Watchdog/GlassShell.Watchdog.csproj`
-- Create: `tests/GlassShell.Core.Tests/GlassShell.Core.Tests.csproj`
-- Create: `src/GlassShell.Core/Config/GlassSettings.cs`
-- Create: `src/GlassShell.Core/Config/JsonSettingsStore.cs`
-- Test: `tests/GlassShell.Core.Tests/Config/JsonSettingsStoreTests.cs`
+- Create: `TahoeDesk.sln`
+- Create: `src/TahoeDesk.Core/TahoeDesk.Core.csproj`
+- Create: `src/TahoeDesk.UI/TahoeDesk.UI.csproj`
+- Create: `src/TahoeDesk.Watchdog/TahoeDesk.Watchdog.csproj`
+- Create: `tests/TahoeDesk.Core.Tests/TahoeDesk.Core.Tests.csproj`
+- Create: `src/TahoeDesk.Core/Config/GlassSettings.cs`
+- Create: `src/TahoeDesk.Core/Config/JsonSettingsStore.cs`
+- Test: `tests/TahoeDesk.Core.Tests/Config/JsonSettingsStoreTests.cs`
 
 **Interfaces:**
 - Produces:
@@ -80,19 +80,19 @@ Run: `git init` and create `.gitignore` ignoring `bin/`, `obj/`, `.vs/`, `*.user
 
 - [ ] **Step 2: Scaffold solution and 4 projects**
 
-Create `GlassShell.sln` and:
-- `src/GlassShell.Core/GlassShell.Core.csproj`: `TargetFramework=net8.0-windows10.0.22621.0`, `Nullable=enable`, `AllowUnsafeBlocks=true`.
-- `src/GlassShell.UI/GlassShell.UI.csproj`: `OutputType=WinExe`, `TargetFramework=net8.0-windows10.0.22621.0`, `UseWPF=true`, `Nullable=enable`, `AllowUnsafeBlocks=true`, references `GlassShell.Core`, packages `CommunityToolkit.Mvvm`, `Vortice.Direct3D11`, `Vortice.DXGI`, `Vortice.D3DCompiler`.
-- `src/GlassShell.Watchdog/GlassShell.Watchdog.csproj`: `OutputType=WinExe`, `TargetFramework=net8.0-windows10.0.22621.0`, `Nullable=enable`.
-- `tests/GlassShell.Core.Tests/GlassShell.Core.Tests.csproj`: `TargetFramework=net8.0-windows10.0.22621.0`, `xUnit`, `Microsoft.NET.Test.Sdk`, `xunit.runner.visualstudio`, references `GlassShell.Core`.
+Create `TahoeDesk.sln` and:
+- `src/TahoeDesk.Core/TahoeDesk.Core.csproj`: `TargetFramework=net8.0-windows10.0.22621.0`, `Nullable=enable`, `AllowUnsafeBlocks=true`.
+- `src/TahoeDesk.UI/TahoeDesk.UI.csproj`: `OutputType=WinExe`, `TargetFramework=net8.0-windows10.0.22621.0`, `UseWPF=true`, `Nullable=enable`, `AllowUnsafeBlocks=true`, references `TahoeDesk.Core`, packages `CommunityToolkit.Mvvm`, `Vortice.Direct3D11`, `Vortice.DXGI`, `Vortice.D3DCompiler`.
+- `src/TahoeDesk.Watchdog/TahoeDesk.Watchdog.csproj`: `OutputType=WinExe`, `TargetFramework=net8.0-windows10.0.22621.0`, `Nullable=enable`.
+- `tests/TahoeDesk.Core.Tests/TahoeDesk.Core.Tests.csproj`: `TargetFramework=net8.0-windows10.0.22621.0`, `xUnit`, `Microsoft.NET.Test.Sdk`, `xunit.runner.visualstudio`, references `TahoeDesk.Core`.
 
 - [ ] **Step 3: Write the failing settings store tests**
 
-Create `tests/GlassShell.Core.Tests/Config/JsonSettingsStoreTests.cs`:
+Create `tests/TahoeDesk.Core.Tests/Config/JsonSettingsStoreTests.cs`:
 ```csharp
 public sealed class JsonSettingsStoreTests : IDisposable
 {
-    private readonly string _tempDir = Path.Combine(Path.GetTempPath(), $"GlassShellTests_{Guid.NewGuid():N}");
+    private readonly string _tempDir = Path.Combine(Path.GetTempPath(), $"TahoeDeskTests_{Guid.NewGuid():N}");
 
     [Fact]
     public void Load_WhenFileMissing_ReturnsSpecDefaults()
@@ -138,24 +138,24 @@ public sealed class JsonSettingsStoreTests : IDisposable
 
 - [ ] **Step 4: Run test to verify it fails**
 
-Run: `dotnet test tests/GlassShell.Core.Tests --filter JsonSettingsStoreTests`
+Run: `dotnet test tests/TahoeDesk.Core.Tests --filter JsonSettingsStoreTests`
 Expected: FAIL with missing type `GlassSettings` / `JsonSettingsStore`.
 
 - [ ] **Step 5: Implement `GlassSettings` and `JsonSettingsStore`**
 
-- In `src/GlassShell.Core/Config/GlassSettings.cs`: define `ThemeMode`, `GlassOpacityPreset`, `DockAutoHideMode`, and `GlassSettings` record with `static GlassSettings Default => new();` matching spec defaults.
-- In `src/GlassShell.Core/Config/JsonSettingsStore.cs`: atomic write via temp file + `File.Move(..., overwrite: true)`, indented camelCase `System.Text.Json`, fallback to `GlassSettings.Default` on missing/corrupt JSON, default path helper `%LocalAppData%\GlassShell\settings.json`.
+- In `src/TahoeDesk.Core/Config/GlassSettings.cs`: define `ThemeMode`, `GlassOpacityPreset`, `DockAutoHideMode`, and `GlassSettings` record with `static GlassSettings Default => new();` matching spec defaults.
+- In `src/TahoeDesk.Core/Config/JsonSettingsStore.cs`: atomic write via temp file + `File.Move(..., overwrite: true)`, indented camelCase `System.Text.Json`, fallback to `GlassSettings.Default` on missing/corrupt JSON, default path helper `%LocalAppData%\TahoeDesk\settings.json`.
 
 - [ ] **Step 6: Run tests and verify pass**
 
-Run: `dotnet test tests/GlassShell.Core.Tests --filter JsonSettingsStoreTests`
+Run: `dotnet test tests/TahoeDesk.Core.Tests --filter JsonSettingsStoreTests`
 Expected: PASS (3/3 tests).
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add .gitignore GlassShell.sln src/ tests/ docs/
-git commit -m "chore: scaffold GlassShell .NET 8 solution and settings store"
+git add .gitignore TahoeDesk.sln src/ tests/ docs/
+git commit -m "chore: scaffold TahoeDesk .NET 8 solution and settings store"
 ```
 
 ---
@@ -163,14 +163,14 @@ git commit -m "chore: scaffold GlassShell .NET 8 solution and settings store"
 ### Task 2: Safe Taskbar Suppression, Top AppBar, Fullscreen Detector & Crash Watchdog
 
 **Files:**
-- Create: `src/GlassShell.Core/Shell/MonitorContext.cs`
-- Create: `src/GlassShell.Core/Shell/ITaskbarNative.cs`
-- Create: `src/GlassShell.Core/Shell/Win32TaskbarNative.cs`
-- Create: `src/GlassShell.Core/Shell/FullscreenDetector.cs`
-- Create: `src/GlassShell.Core/Shell/TaskbarController.cs`
-- Modify: `src/GlassShell.Watchdog/Program.cs`
-- Test: `tests/GlassShell.Core.Tests/Shell/TaskbarControllerTests.cs`
-- Test: `tests/GlassShell.Core.Tests/Shell/FullscreenDetectorTests.cs`
+- Create: `src/TahoeDesk.Core/Shell/MonitorContext.cs`
+- Create: `src/TahoeDesk.Core/Shell/ITaskbarNative.cs`
+- Create: `src/TahoeDesk.Core/Shell/Win32TaskbarNative.cs`
+- Create: `src/TahoeDesk.Core/Shell/FullscreenDetector.cs`
+- Create: `src/TahoeDesk.Core/Shell/TaskbarController.cs`
+- Modify: `src/TahoeDesk.Watchdog/Program.cs`
+- Test: `tests/TahoeDesk.Core.Tests/Shell/TaskbarControllerTests.cs`
+- Test: `tests/TahoeDesk.Core.Tests/Shell/FullscreenDetectorTests.cs`
 
 **Interfaces:**
 - Produces:
@@ -180,11 +180,11 @@ git commit -m "chore: scaffold GlassShell .NET 8 solution and settings store"
   - `interface ITaskbarNative`: `nint FindPrimaryTaskbar()`, `bool SetWindowVisible(nint hwnd, bool visible)`, `bool RegisterTopAppBar(nint appBarHwnd, int heightPx, ScreenRect monitorBounds)`, `void UnregisterAppBar(nint appBarHwnd)`, `bool IsD3DFullscreenActive()`
   - `static class FullscreenDetector`: `static bool IsFullscreen(ForegroundWindowInfo window, MonitorContext monitor, bool isD3DFullscreen)`
   - `sealed class TaskbarController(ITaskbarNative native)`: `bool IsAcquired`, `bool IsTrayPeekActive`, `bool IsFullscreenYieldActive`, `event Action<bool>? BarsVisibilityChanged`, `void Acquire(nint appBarHwnd, MonitorContext primaryMonitor, int topBarDip = 28)`, `void Release()`, `void BeginTrayPeek()`, `void EndTrayPeek()`, `void HandleExplorerRestart()`, `void HandleTaskbarShownEvent()`, `void UpdateFullscreenState(bool isFullscreen)`
-  - `GlassShell.Watchdog` CLI: `--parent-pid <int> --clean-event <string>` and `--restore-taskbar`
+  - `TahoeDesk.Watchdog` CLI: `--parent-pid <int> --clean-event <string>` and `--restore-taskbar`
 
 - [ ] **Step 1: Write failing tests for `FullscreenDetector` and `TaskbarController` (covering Review Focus #1 & #5)**
 
-Create `tests/GlassShell.Core.Tests/Shell/FullscreenDetectorTests.cs`:
+Create `tests/TahoeDesk.Core.Tests/Shell/FullscreenDetectorTests.cs`:
 ```csharp
 public sealed class FullscreenDetectorTests
 {
@@ -216,7 +216,7 @@ public sealed class FullscreenDetectorTests
 }
 ```
 
-Create `tests/GlassShell.Core.Tests/Shell/TaskbarControllerTests.cs` using an in-memory `FakeTaskbarNative`:
+Create `tests/TahoeDesk.Core.Tests/Shell/TaskbarControllerTests.cs` using an in-memory `FakeTaskbarNative`:
 ```csharp
 public sealed class TaskbarControllerTests
 {
@@ -285,28 +285,28 @@ public sealed class TaskbarControllerTests
 
 - [ ] **Step 2: Run tests to verify failure**
 
-Run: `dotnet test tests/GlassShell.Core.Tests --filter "TaskbarControllerTests|FullscreenDetectorTests"`
+Run: `dotnet test tests/TahoeDesk.Core.Tests --filter "TaskbarControllerTests|FullscreenDetectorTests"`
 Expected: FAIL with missing types.
 
-- [ ] **Step 3: Implement `Shell` classes and `GlassShell.Watchdog`**
+- [ ] **Step 3: Implement `Shell` classes and `TahoeDesk.Watchdog`**
 
 - `MonitorContext.cs`: `ScreenRect`, `MonitorContext`, static `GetPrimaryMonitor()` using `MonitorFromPoint` + `GetMonitorInfo` + `GetDpiForMonitor`.
 - `ITaskbarNative.cs` & `Win32TaskbarNative.cs`: P/Invoke for `FindWindowW("Shell_TrayWnd", null)`, `ShowWindow(SW_HIDE / SW_SHOW)`, `SHAppBarMessage(ABM_NEW / ABM_QUERYPOS / ABM_SETPOS / ABM_REMOVE)`, `SHQueryUserNotificationState` (`QUNS_RUNNING_D3D_FULL_SCREEN`).
 - `FullscreenDetector.cs`: Ignore `Progman`, `WorkerW`, `Shell_TrayWnd`, `Shell_SecondaryTrayWnd`, minimized/cloaked windows; return `true` if `isD3DFullscreen` or window bounds cover `monitor.Bounds` within ±1px tolerance.
 - `TaskbarController.cs`: Implement exact state machine with thread-safe lock, `Acquire`, `Release`, `BeginTrayPeek`, `EndTrayPeek`, `HandleExplorerRestart` (re-resolves `Shell_TrayWnd` and re-applies hide if acquired & not peeking), `HandleTaskbarShownEvent`, `UpdateFullscreenState`.
-- `src/GlassShell.Watchdog/Program.cs`:
+- `src/TahoeDesk.Watchdog/Program.cs`:
   - If `--restore-taskbar`: `FindWindowW("Shell_TrayWnd", null)` → `ShowWindow(SW_SHOW)` and exit 0.
   - If `--parent-pid <pid> --clean-event <name>`: open parent process handle (`SYNCHRONIZE`) and named manual-reset Event; wait for parent exit via `WaitForSingleObject(parentHandle, INFINITE)`; check if clean-exit event is signaled (`WaitForSingleObject(eventHandle, 0) == WAIT_OBJECT_0`); if NOT signaled, immediately call `ShowWindow(FindWindowW("Shell_TrayWnd", null), SW_SHOW)`.
 
 - [ ] **Step 4: Run tests and verify pass**
 
-Run: `dotnet test tests/GlassShell.Core.Tests --filter "TaskbarControllerTests|FullscreenDetectorTests"`
+Run: `dotnet test tests/TahoeDesk.Core.Tests --filter "TaskbarControllerTests|FullscreenDetectorTests"`
 Expected: PASS (all tests pass).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/GlassShell.Core/Shell/ src/GlassShell.Watchdog/ tests/GlassShell.Core.Tests/Shell/
+git add src/TahoeDesk.Core/Shell/ src/TahoeDesk.Watchdog/ tests/TahoeDesk.Core.Tests/Shell/
 git commit -m "feat(shell): add taskbar suppression, AppBar, fullscreen detector, and crash watchdog"
 ```
 
@@ -315,13 +315,13 @@ git commit -m "feat(shell): add taskbar suppression, AppBar, fullscreen detector
 ### Task 3: Window Tracking, High-Res Icon Extraction, Recycle Bin & Dock Model Coordinator
 
 **Files:**
-- Create: `src/GlassShell.Core/Discovery/WindowModels.cs`
-- Create: `src/GlassShell.Core/Discovery/IWindowTracker.cs`
-- Create: `src/GlassShell.Core/Discovery/WindowTracker.cs`
-- Create: `src/GlassShell.Core/Discovery/IconExtractor.cs`
-- Create: `src/GlassShell.Core/Discovery/RecycleBinService.cs`
-- Create: `src/GlassShell.Core/Discovery/DockModelCoordinator.cs`
-- Test: `tests/GlassShell.Core.Tests/Discovery/DockModelCoordinatorTests.cs`
+- Create: `src/TahoeDesk.Core/Discovery/WindowModels.cs`
+- Create: `src/TahoeDesk.Core/Discovery/IWindowTracker.cs`
+- Create: `src/TahoeDesk.Core/Discovery/WindowTracker.cs`
+- Create: `src/TahoeDesk.Core/Discovery/IconExtractor.cs`
+- Create: `src/TahoeDesk.Core/Discovery/RecycleBinService.cs`
+- Create: `src/TahoeDesk.Core/Discovery/DockModelCoordinator.cs`
+- Test: `tests/TahoeDesk.Core.Tests/Discovery/DockModelCoordinatorTests.cs`
 
 **Interfaces:**
 - Consumes: `GlassSettings` (Task 1), `ForegroundWindowInfo` (Task 2)
@@ -338,7 +338,7 @@ git commit -m "feat(shell): add taskbar suppression, AppBar, fullscreen detector
 
 - [ ] **Step 1: Write failing tests for `DockModelCoordinator`**
 
-Create `tests/GlassShell.Core.Tests/Discovery/DockModelCoordinatorTests.cs`:
+Create `tests/TahoeDesk.Core.Tests/Discovery/DockModelCoordinatorTests.cs`:
 ```csharp
 public sealed class DockModelCoordinatorTests
 {
@@ -381,7 +381,7 @@ public sealed class DockModelCoordinatorTests
 
 - [ ] **Step 2: Run test to verify failure**
 
-Run: `dotnet test tests/GlassShell.Core.Tests --filter DockModelCoordinatorTests`
+Run: `dotnet test tests/TahoeDesk.Core.Tests --filter DockModelCoordinatorTests`
 Expected: FAIL with missing types.
 
 - [ ] **Step 3: Implement `Discovery` classes**
@@ -393,13 +393,13 @@ Expected: FAIL with missing types.
 
 - [ ] **Step 4: Run tests and verify pass**
 
-Run: `dotnet test tests/GlassShell.Core.Tests --filter DockModelCoordinatorTests`
+Run: `dotnet test tests/TahoeDesk.Core.Tests --filter DockModelCoordinatorTests`
 Expected: PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/GlassShell.Core/Discovery/ tests/GlassShell.Core.Tests/Discovery/
+git add src/TahoeDesk.Core/Discovery/ tests/TahoeDesk.Core.Tests/Discovery/
 git commit -m "feat(discovery): add window tracker, icon extractor, recycle bin, and 3-section Dock coordinator"
 ```
 
@@ -408,21 +408,21 @@ git commit -m "feat(discovery): add window tracker, icon extractor, recycle bin,
 ### Task 4: Absolute-Silent 3-Tier Foreground Application Menu Engine
 
 **Files:**
-- Create: `src/GlassShell.Core/MenuEngine/MenuModels.cs`
-- Create: `src/GlassShell.Core/MenuEngine/IMenuExtractor.cs`
-- Create: `src/GlassShell.Core/MenuEngine/Win32GetMenuExtractor.cs`
-- Create: `src/GlassShell.Core/MenuEngine/StaticUiaMenuExtractor.cs`
-- Create: `src/GlassShell.Core/MenuEngine/JsonProfileMenuProvider.cs`
-- Create: `src/GlassShell.Core/MenuEngine/MenuCommandDispatcher.cs`
-- Create: `src/GlassShell.Core/MenuEngine/ForegroundMenuCoordinator.cs`
-- Create: `src/GlassShell.Core/MenuEngine/Assets/MenuProfiles/_generic.json`
-- Create: `src/GlassShell.Core/MenuEngine/Assets/MenuProfiles/chrome.json`
-- Create: `src/GlassShell.Core/MenuEngine/Assets/MenuProfiles/msedge.json`
-- Create: `src/GlassShell.Core/MenuEngine/Assets/MenuProfiles/code.json`
-- Create: `src/GlassShell.Core/MenuEngine/Assets/MenuProfiles/explorer.json`
-- Create: `src/GlassShell.Core/MenuEngine/Assets/MenuProfiles/notepad.json`
-- Create: `src/GlassShell.Core/MenuEngine/Assets/MenuProfiles/windowsterminal.json`
-- Test: `tests/GlassShell.Core.Tests/MenuEngine/ForegroundMenuCoordinatorTests.cs`
+- Create: `src/TahoeDesk.Core/MenuEngine/MenuModels.cs`
+- Create: `src/TahoeDesk.Core/MenuEngine/IMenuExtractor.cs`
+- Create: `src/TahoeDesk.Core/MenuEngine/Win32GetMenuExtractor.cs`
+- Create: `src/TahoeDesk.Core/MenuEngine/StaticUiaMenuExtractor.cs`
+- Create: `src/TahoeDesk.Core/MenuEngine/JsonProfileMenuProvider.cs`
+- Create: `src/TahoeDesk.Core/MenuEngine/MenuCommandDispatcher.cs`
+- Create: `src/TahoeDesk.Core/MenuEngine/ForegroundMenuCoordinator.cs`
+- Create: `src/TahoeDesk.Core/MenuEngine/Assets/MenuProfiles/_generic.json`
+- Create: `src/TahoeDesk.Core/MenuEngine/Assets/MenuProfiles/chrome.json`
+- Create: `src/TahoeDesk.Core/MenuEngine/Assets/MenuProfiles/msedge.json`
+- Create: `src/TahoeDesk.Core/MenuEngine/Assets/MenuProfiles/code.json`
+- Create: `src/TahoeDesk.Core/MenuEngine/Assets/MenuProfiles/explorer.json`
+- Create: `src/TahoeDesk.Core/MenuEngine/Assets/MenuProfiles/notepad.json`
+- Create: `src/TahoeDesk.Core/MenuEngine/Assets/MenuProfiles/windowsterminal.json`
+- Test: `tests/TahoeDesk.Core.Tests/MenuEngine/ForegroundMenuCoordinatorTests.cs`
 
 **Interfaces:**
 - Produces:
@@ -437,7 +437,7 @@ git commit -m "feat(discovery): add window tracker, icon extractor, recycle bin,
 
 - [ ] **Step 1: Write failing tests covering silent 3-tier fallback, 200ms timeout, UIPI error, rapid switch cancellation, and self-HWND ignore (Review Focus #2 & #4)**
 
-Create `tests/GlassShell.Core.Tests/MenuEngine/ForegroundMenuCoordinatorTests.cs`:
+Create `tests/TahoeDesk.Core.Tests/MenuEngine/ForegroundMenuCoordinatorTests.cs`:
 ```csharp
 public sealed class ForegroundMenuCoordinatorTests
 {
@@ -448,7 +448,7 @@ public sealed class ForegroundMenuCoordinatorTests
         var coord = new ForegroundMenuCoordinator([], profiles, selfProcessId: 999);
 
         await coord.OnForegroundChangedAsync(100, 10, "chrome", "Google Chrome");
-        await coord.OnForegroundChangedAsync(200, 999, "GlassShell.UI", "GlassShell");
+        await coord.OnForegroundChangedAsync(200, 999, "TahoeDesk.UI", "TahoeDesk");
 
         Assert.Equal((nint)100, coord.CurrentSnapshot.TargetHwnd);
         Assert.Equal("Google Chrome", coord.CurrentSnapshot.AppDisplayName);
@@ -507,26 +507,26 @@ public sealed class ForegroundMenuCoordinatorTests
 
 - [ ] **Step 2: Run tests to verify failure**
 
-Run: `dotnet test tests/GlassShell.Core.Tests --filter ForegroundMenuCoordinatorTests`
+Run: `dotnet test tests/TahoeDesk.Core.Tests --filter ForegroundMenuCoordinatorTests`
 Expected: FAIL with missing types.
 
 - [ ] **Step 3: Implement silent 3-tier `MenuEngine` and JSON profiles**
 
 - `Win32GetMenuExtractor.cs`: Silent recursive `GetMenu` / `GetMenuItemCount` / `GetMenuItemInfoW` / `GetSubMenu` (strips `&` mnemonics, splits `\t` into `Title` and `ShortcutText`, preserves `MF_GRAYED` & `MF_CHECKED`).
 - `StaticUiaMenuExtractor.cs`: Dedicated single MTA worker / `Task.Run`, finds `ControlType.MenuBar` via COM `IUIAutomation` (using `TreeScope_Children` / max depth 2), reads **ONLY already-populated static children** (NEVER calls `Expand()`). Discards result if top-level items have 0 children so Tier 3 handles lazy apps cleanly.
-- `JsonProfileMenuProvider.cs`: Loads embedded JSON profiles from `Assets/MenuProfiles/` (`_generic`, `chrome`, `msedge`, `code`, `explorer`, `notepad`, `windowsterminal`) plus optional user override folder `%LocalAppData%\GlassShell\MenuProfiles\`. Mark `.json` files as `<EmbeddedResource>` in `GlassShell.Core.csproj`.
+- `JsonProfileMenuProvider.cs`: Loads embedded JSON profiles from `Assets/MenuProfiles/` (`_generic`, `chrome`, `msedge`, `code`, `explorer`, `notepad`, `windowsterminal`) plus optional user override folder `%LocalAppData%\TahoeDesk\MenuProfiles\`. Mark `.json` files as `<EmbeddedResource>` in `TahoeDesk.Core.csproj`.
 - `MenuCommandDispatcher.cs`: Restores `SetForegroundWindow(targetHwnd)` if needed, then dispatches `Win32Command` (`PostMessage(WM_COMMAND)`), `UiaInvoke` (`InvokePattern.Invoke()`), `KeyboardShortcut` (`SendInput` key chord), or `WindowCommand` (`Minimize`/`Maximize`/`Close`/`SnapLeft`/`SnapRight`/`ToggleTopMost`). Swallows UIPI `E_ACCESSDENIED` cleanly returning `false`.
 - `ForegroundMenuCoordinator.cs`: Enforces `200ms` per-probe `CancellationTokenSource.CreateLinkedTokenSource`, cancels previous focus task on every switch, ignores `processId == selfProcessId`, caches negative UIA probes per `(ProcessName, WindowClass)`.
 
 - [ ] **Step 4: Run tests and verify pass**
 
-Run: `dotnet test tests/GlassShell.Core.Tests --filter ForegroundMenuCoordinatorTests`
+Run: `dotnet test tests/TahoeDesk.Core.Tests --filter ForegroundMenuCoordinatorTests`
 Expected: PASS (4/4 tests).
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/GlassShell.Core/MenuEngine/ src/GlassShell.Core/GlassShell.Core.csproj tests/GlassShell.Core.Tests/MenuEngine/
+git add src/TahoeDesk.Core/MenuEngine/ src/TahoeDesk.Core/TahoeDesk.Core.csproj tests/TahoeDesk.Core.Tests/MenuEngine/
 git commit -m "feat(menu-engine): add silent 3-tier foreground app menu extraction and JSON profiles"
 ```
 
@@ -535,15 +535,15 @@ git commit -m "feat(menu-engine): add silent 3-tier foreground app menu extracti
 ### Task 5: DXGI Local Desktop Sampler & D3D11 HLSL Liquid Glass Engine
 
 **Files:**
-- Create: `src/GlassShell.Core/Glass/GlassRenderParams.cs`
-- Create: `src/GlassShell.Core/Glass/IBackdropSampler.cs`
-- Create: `src/GlassShell.Core/Glass/DxgiSamplerStateMachine.cs`
-- Create: `src/GlassShell.UI/Glass/WindowInteropHelperEx.cs`
-- Create: `src/GlassShell.UI/Glass/DxgiBackdropSampler.cs`
-- Create: `src/GlassShell.UI/Glass/Shaders/LiquidGlass.hlsl`
-- Create: `src/GlassShell.UI/Glass/LiquidGlassRenderer.cs`
-- Create: `src/GlassShell.UI/Glass/LiquidGlassSurface.cs`
-- Test: `tests/GlassShell.Core.Tests/Glass/DxgiSamplerStateMachineTests.cs`
+- Create: `src/TahoeDesk.Core/Glass/GlassRenderParams.cs`
+- Create: `src/TahoeDesk.Core/Glass/IBackdropSampler.cs`
+- Create: `src/TahoeDesk.Core/Glass/DxgiSamplerStateMachine.cs`
+- Create: `src/TahoeDesk.UI/Glass/WindowInteropHelperEx.cs`
+- Create: `src/TahoeDesk.UI/Glass/DxgiBackdropSampler.cs`
+- Create: `src/TahoeDesk.UI/Glass/Shaders/LiquidGlass.hlsl`
+- Create: `src/TahoeDesk.UI/Glass/LiquidGlassRenderer.cs`
+- Create: `src/TahoeDesk.UI/Glass/LiquidGlassSurface.cs`
+- Test: `tests/TahoeDesk.Core.Tests/Glass/DxgiSamplerStateMachineTests.cs`
 
 **Interfaces:**
 - Consumes: `GlassOpacityPreset` (Task 1), `ScreenRect` (Task 2)
@@ -556,7 +556,7 @@ git commit -m "feat(menu-engine): add silent 3-tier foreground app menu extracti
 
 - [ ] **Step 1: Write failing tests for `GlassRenderParams` and `DxgiSamplerStateMachine` (Review Focus #3)**
 
-Create `tests/GlassShell.Core.Tests/Glass/DxgiSamplerStateMachineTests.cs`:
+Create `tests/TahoeDesk.Core.Tests/Glass/DxgiSamplerStateMachineTests.cs`:
 ```csharp
 public sealed class DxgiSamplerStateMachineTests
 {
@@ -595,12 +595,12 @@ public sealed class DxgiSamplerStateMachineTests
 
 - [ ] **Step 2: Run tests to verify failure**
 
-Run: `dotnet test tests/GlassShell.Core.Tests --filter DxgiSamplerStateMachineTests`
+Run: `dotnet test tests/TahoeDesk.Core.Tests --filter DxgiSamplerStateMachineTests`
 Expected: FAIL with missing types.
 
 - [ ] **Step 3: Implement DXGI sampler state machine, HLSL Liquid Glass shader, and WPF `LiquidGlassSurface`**
 
-- `GlassRenderParams.cs` & `DxgiSamplerStateMachine.cs` in `GlassShell.Core/Glass/`.
+- `GlassRenderParams.cs` & `DxgiSamplerStateMachine.cs` in `TahoeDesk.Core/Glass/`.
 - `WindowInteropHelperEx.cs`: P/Invoke `SetWindowLongPtr` (`WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW`) and `SetWindowDisplayAffinity(hwnd, 0x00000011 /* WDA_EXCLUDEFROMCAPTURE */)`.
 - `DxgiBackdropSampler.cs`: Uses `Vortice.DXGI` `IDXGIOutput1.DuplicateOutput` on primary output, `AcquireNextFrame(0)` non-blocking dirty-rect copy of only the requested `ScreenRect` sub-regions into a shared `ID3D11Texture2D`, driving `DxgiSamplerStateMachine` on `DXGI_ERROR_ACCESS_LOST` / `DXGI_ERROR_DEVICE_REMOVED`.
 - `Shaders/LiquidGlass.hlsl`: Multi-tap Dual-Kawase blur pass + SDF continuous-curvature Squircle mask + edge-normal UV optical refraction offset along `RefractionBandPx` + top-left directional specular rim highlight + soft ambient outer shadow + dark/light adaptive tint.
@@ -608,13 +608,13 @@ Expected: FAIL with missing types.
 
 - [ ] **Step 4: Run build and tests to verify pass**
 
-Run: `dotnet build GlassShell.sln && dotnet test tests/GlassShell.Core.Tests --filter DxgiSamplerStateMachineTests`
+Run: `dotnet build TahoeDesk.sln && dotnet test tests/TahoeDesk.Core.Tests --filter DxgiSamplerStateMachineTests`
 Expected: Build succeeds (0 errors) and tests PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/GlassShell.Core/Glass/ src/GlassShell.UI/Glass/ tests/GlassShell.Core.Tests/Glass/
+git add src/TahoeDesk.Core/Glass/ src/TahoeDesk.UI/Glass/ tests/TahoeDesk.Core.Tests/Glass/
 git commit -m "feat(glass): add DXGI local desktop sampler and D3D11 HLSL Liquid Glass engine"
 ```
 
@@ -623,21 +623,21 @@ git commit -m "feat(glass): add DXGI local desktop sampler and D3D11 HLSL Liquid
 ### Task 6: Top Menu Bar Window, Cascading Liquid Glass Menus & Mini Calendar Card
 
 **Files:**
-- Create: `src/GlassShell.Core/SystemStatus/SystemStatusModels.cs`
-- Create: `src/GlassShell.Core/SystemStatus/SystemStatusProvider.cs`
-- Create: `src/GlassShell.UI/Themes/LiquidGlassStyles.xaml`
-- Create: `src/GlassShell.UI/MenuBar/MenuBarViewModel.cs`
-- Create: `src/GlassShell.UI/MenuBar/MenuBarWindow.xaml`
-- Create: `src/GlassShell.UI/MenuBar/MenuBarWindow.xaml.cs`
-- Create: `src/GlassShell.UI/MenuBar/LiquidGlassMenuPopup.xaml`
-- Create: `src/GlassShell.UI/MenuBar/LiquidGlassMenuPopup.xaml.cs`
-- Create: `src/GlassShell.UI/MenuBar/CalendarPopup.xaml`
-- Create: `src/GlassShell.UI/MenuBar/CalendarPopup.xaml.cs`
-- Create: `src/GlassShell.UI/MenuBar/AboutPcDialog.xaml`
-- Create: `src/GlassShell.UI/MenuBar/AboutPcDialog.xaml.cs`
-- Create: `src/GlassShell.UI/MenuBar/ForceQuitWindow.xaml`
-- Create: `src/GlassShell.UI/MenuBar/ForceQuitWindow.xaml.cs`
-- Test: `tests/GlassShell.Core.Tests/SystemStatus/SystemStatusProviderTests.cs`
+- Create: `src/TahoeDesk.Core/SystemStatus/SystemStatusModels.cs`
+- Create: `src/TahoeDesk.Core/SystemStatus/SystemStatusProvider.cs`
+- Create: `src/TahoeDesk.UI/Themes/LiquidGlassStyles.xaml`
+- Create: `src/TahoeDesk.UI/MenuBar/MenuBarViewModel.cs`
+- Create: `src/TahoeDesk.UI/MenuBar/MenuBarWindow.xaml`
+- Create: `src/TahoeDesk.UI/MenuBar/MenuBarWindow.xaml.cs`
+- Create: `src/TahoeDesk.UI/MenuBar/LiquidGlassMenuPopup.xaml`
+- Create: `src/TahoeDesk.UI/MenuBar/LiquidGlassMenuPopup.xaml.cs`
+- Create: `src/TahoeDesk.UI/MenuBar/CalendarPopup.xaml`
+- Create: `src/TahoeDesk.UI/MenuBar/CalendarPopup.xaml.cs`
+- Create: `src/TahoeDesk.UI/MenuBar/AboutPcDialog.xaml`
+- Create: `src/TahoeDesk.UI/MenuBar/AboutPcDialog.xaml.cs`
+- Create: `src/TahoeDesk.UI/MenuBar/ForceQuitWindow.xaml`
+- Create: `src/TahoeDesk.UI/MenuBar/ForceQuitWindow.xaml.cs`
+- Test: `tests/TahoeDesk.Core.Tests/SystemStatus/SystemStatusProviderTests.cs`
 
 **Interfaces:**
 - Consumes: `GlassSettings` (Task 1), `TaskbarController` (Task 2), `ForegroundMenuCoordinator` & `MenuCommandDispatcher` (Task 4), `LiquidGlassSurface` & `WindowInteropHelperEx` (Task 5)
@@ -648,7 +648,7 @@ git commit -m "feat(glass): add DXGI local desktop sampler and D3D11 HLSL Liquid
 
 - [ ] **Step 1: Write failing tests for Chinese macOS clock formatting and desktop battery hiding**
 
-Create `tests/GlassShell.Core.Tests/SystemStatus/SystemStatusProviderTests.cs`:
+Create `tests/TahoeDesk.Core.Tests/SystemStatus/SystemStatusProviderTests.cs`:
 ```csharp
 public sealed class SystemStatusProviderTests
 {
@@ -670,7 +670,7 @@ public sealed class SystemStatusProviderTests
 
 - [ ] **Step 2: Run test to verify failure**
 
-Run: `dotnet test tests/GlassShell.Core.Tests --filter SystemStatusProviderTests`
+Run: `dotnet test tests/TahoeDesk.Core.Tests --filter SystemStatusProviderTests`
 Expected: FAIL with missing types.
 
 - [ ] **Step 3: Implement `SystemStatusProvider` and Top Menu Bar WPF UI**
@@ -684,13 +684,13 @@ Expected: FAIL with missing types.
 
 - [ ] **Step 4: Run build and tests to verify pass**
 
-Run: `dotnet build GlassShell.sln && dotnet test tests/GlassShell.Core.Tests --filter SystemStatusProviderTests`
+Run: `dotnet build TahoeDesk.sln && dotnet test tests/TahoeDesk.Core.Tests --filter SystemStatusProviderTests`
 Expected: Build succeeds and tests PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/GlassShell.Core/SystemStatus/ src/GlassShell.UI/Themes/ src/GlassShell.UI/MenuBar/ tests/GlassShell.Core.Tests/SystemStatus/
+git add src/TahoeDesk.Core/SystemStatus/ src/TahoeDesk.UI/Themes/ src/TahoeDesk.UI/MenuBar/ tests/TahoeDesk.Core.Tests/SystemStatus/
 git commit -m "feat(menubar): add Liquid Glass top menu bar, cascading menus, and mini calendar card"
 ```
 
@@ -699,16 +699,16 @@ git commit -m "feat(menubar): add Liquid Glass top menu bar, cascading menus, an
 ### Task 7: Bottom Dock Physics Engine, Liquid Glass Dock Window, Tooltips & Drag-and-Drop
 
 **Files:**
-- Create: `src/GlassShell.Core/DockPhysics/DockMagnificationCalculator.cs`
-- Create: `src/GlassShell.Core/DockPhysics/SpringBounceAnimator.cs`
-- Create: `src/GlassShell.Core/DockPhysics/DockAutoHideController.cs`
-- Create: `src/GlassShell.UI/Dock/DockViewModel.cs`
-- Create: `src/GlassShell.UI/Dock/DockWindow.xaml`
-- Create: `src/GlassShell.UI/Dock/DockWindow.xaml.cs`
-- Create: `src/GlassShell.UI/Dock/DockTooltipPopup.xaml`
-- Create: `src/GlassShell.UI/Dock/DockTooltipPopup.xaml.cs`
-- Create: `src/GlassShell.UI/Dock/DockContextMenu.cs`
-- Test: `tests/GlassShell.Core.Tests/DockPhysics/DockPhysicsTests.cs`
+- Create: `src/TahoeDesk.Core/DockPhysics/DockMagnificationCalculator.cs`
+- Create: `src/TahoeDesk.Core/DockPhysics/SpringBounceAnimator.cs`
+- Create: `src/TahoeDesk.Core/DockPhysics/DockAutoHideController.cs`
+- Create: `src/TahoeDesk.UI/Dock/DockViewModel.cs`
+- Create: `src/TahoeDesk.UI/Dock/DockWindow.xaml`
+- Create: `src/TahoeDesk.UI/Dock/DockWindow.xaml.cs`
+- Create: `src/TahoeDesk.UI/Dock/DockTooltipPopup.xaml`
+- Create: `src/TahoeDesk.UI/Dock/DockTooltipPopup.xaml.cs`
+- Create: `src/TahoeDesk.UI/Dock/DockContextMenu.cs`
+- Test: `tests/TahoeDesk.Core.Tests/DockPhysics/DockPhysicsTests.cs`
 
 **Interfaces:**
 - Consumes: `GlassSettings` (Task 1), `MonitorContext` (Task 2), `DockItemModel`, `DockModelCoordinator`, `IconExtractor`, `RecycleBinService` (Task 3), `LiquidGlassSurface`, `WindowInteropHelperEx` (Task 5)
@@ -721,7 +721,7 @@ git commit -m "feat(menubar): add Liquid Glass top menu bar, cascading menus, an
 
 - [ ] **Step 1: Write failing tests for `DockMagnificationCalculator`, `SpringBounceAnimator`, and `DockAutoHideController`**
 
-Create `tests/GlassShell.Core.Tests/DockPhysics/DockPhysicsTests.cs`:
+Create `tests/TahoeDesk.Core.Tests/DockPhysics/DockPhysicsTests.cs`:
 ```csharp
 public sealed class DockPhysicsTests
 {
@@ -763,7 +763,7 @@ public sealed class DockPhysicsTests
 
 - [ ] **Step 2: Run tests to verify failure**
 
-Run: `dotnet test tests/GlassShell.Core.Tests --filter DockPhysicsTests`
+Run: `dotnet test tests/TahoeDesk.Core.Tests --filter DockPhysicsTests`
 Expected: FAIL with missing types.
 
 - [ ] **Step 3: Implement Dock physics engine and `DockWindow`**
@@ -782,13 +782,13 @@ Expected: FAIL with missing types.
 
 - [ ] **Step 4: Run build and tests to verify pass**
 
-Run: `dotnet build GlassShell.sln && dotnet test tests/GlassShell.Core.Tests --filter DockPhysicsTests`
+Run: `dotnet build TahoeDesk.sln && dotnet test tests/TahoeDesk.Core.Tests --filter DockPhysicsTests`
 Expected: Build succeeds and tests PASS.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/GlassShell.Core/DockPhysics/ src/GlassShell.UI/Dock/ tests/GlassShell.Core.Tests/DockPhysics/
+git add src/TahoeDesk.Core/DockPhysics/ src/TahoeDesk.UI/Dock/ tests/TahoeDesk.Core.Tests/DockPhysics/
 git commit -m "feat(dock): add Gaussian magnification physics, Liquid Glass Dock, tooltips, and drag-and-drop"
 ```
 
@@ -797,19 +797,19 @@ git commit -m "feat(dock): add Gaussian magnification physics, Liquid Glass Dock
 ### Task 8: Application Bootstrap, Watchdog Integration & Phase 1 End-to-End Verification
 
 **Files:**
-- Modify: `src/GlassShell.UI/App.xaml`
-- Modify: `src/GlassShell.UI/App.xaml.cs`
-- Create: `src/GlassShell.UI/Settings/QuickSettingsWindow.xaml`
-- Create: `src/GlassShell.UI/Settings/QuickSettingsWindow.xaml.cs`
+- Modify: `src/TahoeDesk.UI/App.xaml`
+- Modify: `src/TahoeDesk.UI/App.xaml.cs`
+- Create: `src/TahoeDesk.UI/Settings/QuickSettingsWindow.xaml`
+- Create: `src/TahoeDesk.UI/Settings/QuickSettingsWindow.xaml.cs`
 
 **Interfaces:**
-- Consumes: All Phase 1 components from Tasks 1–7 (`JsonSettingsStore`, `TaskbarController`, `WindowTracker`, `DockModelCoordinator`, `ForegroundMenuCoordinator`, `DxgiBackdropSampler`, `MenuBarWindow`, `DockWindow`, `GlassShell.Watchdog`)
+- Consumes: All Phase 1 components from Tasks 1–7 (`JsonSettingsStore`, `TaskbarController`, `WindowTracker`, `DockModelCoordinator`, `ForegroundMenuCoordinator`, `DxgiBackdropSampler`, `MenuBarWindow`, `DockWindow`, `TahoeDesk.Watchdog`)
 
 - [ ] **Step 1: Wire `App.xaml.cs` lifecycle, single-instance guard, Watchdog launch & safe cleanup**
 
 - Handle `--restore-taskbar` argument immediately (call `Win32TaskbarNative` restore & exit 0).
-- Enforce single-instance `Mutex("Local\\GlassShell_SingleInstance")`.
-- Create named clean-exit `EventWaitHandle("Global\\GlassShell_CleanExit_" + pid)` and spawn `GlassShell.Watchdog.exe --parent-pid <pid> --clean-event <name>`.
+- Enforce single-instance `Mutex("Local\\TahoeDesk_SingleInstance")`.
+- Create named clean-exit `EventWaitHandle("Global\\TahoeDesk_CleanExit_" + pid)` and spawn `TahoeDesk.Watchdog.exe --parent-pid <pid> --clean-event <name>`.
 - Load `GlassSettings` via `JsonSettingsStore`, create `MonitorContext.GetPrimaryMonitor()`, initialize `TaskbarController`, `WindowTracker`, `ForegroundMenuCoordinator`, `DxgiBackdropSampler`, `MenuBarWindow`, and `DockWindow`.
 - Wire `SystemEvents.SessionEnding`, `AppDomain.CurrentDomain.UnhandledException`, `DispatcherUnhandledException`, and `App.OnExit` to cleanly call `TaskbarController.Release()`, signal the clean-exit event, dispose DXGI/hooks, and exit.
 - Wire `QuickSettingsWindow` (macOS-styled minimal Phase 1 settings for Theme, GlassOpacityPreset, ShowMenuBarBackground, DockIconSize, Magnification, AutoHide, and "恢复 Windows 原生任务栏并退出" button) so every Phase 1 setting is immediately usable.
@@ -817,7 +817,7 @@ git commit -m "feat(dock): add Gaussian magnification physics, Liquid Glass Dock
 
 - [ ] **Step 2: Run full solution build and complete unit test suite**
 
-Run: `dotnet build GlassShell.sln -c Debug && dotnet test GlassShell.sln --verbosity normal`
+Run: `dotnet build TahoeDesk.sln -c Debug && dotnet test TahoeDesk.sln --verbosity normal`
 Expected: `Build succeeded. 0 Error(s)` and ALL unit tests PASS.
 
 - [ ] **Step 3: Live smoke test & Phase 1 verification checklist**
@@ -826,12 +826,12 @@ Verify on Windows 11 (outside sandbox if GUI display required):
 1. Native taskbar hides cleanly; maximizing Explorer stops cleanly below the `28 DIP` top bar.
 2. Top Menu Bar is transparent over wallpaper; switching between Explorer, Notepad, Chrome, and VS Code updates active app & top menus silently (zero native menu flashing inside target windows); clicking a menu command executes on the target window.
 3. Bottom Dock renders Liquid Glass Squircle capsule with edge refraction; hovering magnifies icons smoothly above the capsule; launching an app bounces; clicking top-right tray chevron reveals bottom native taskbar and tucks Dock away, then restores on click-away.
-4. Force-killing `GlassShell.UI.exe` triggers `GlassShell.Watchdog.exe` to restore the Windows native taskbar within 1 second.
+4. Force-killing `TahoeDesk.exe` triggers `TahoeDesk.Watchdog.exe` to restore the Windows native taskbar within 1 second.
 
 - [ ] **Step 4: Commit**
 
 ```bash
-git add src/GlassShell.UI/App.xaml src/GlassShell.UI/App.xaml.cs src/GlassShell.UI/Settings/
+git add src/TahoeDesk.UI/App.xaml src/TahoeDesk.UI/App.xaml.cs src/TahoeDesk.UI/Settings/
 git commit -m "feat(app): wire Phase 1 bootstrap, crash watchdog, and minimal quick settings"
 ```
 

@@ -1,9 +1,9 @@
-# GlassShell（Windows 仿 macOS 液态玻璃桌面环境）设计文档
+# TahoeDesk（Windows 仿 macOS 液态玻璃桌面环境）设计文档
 
 - **日期**：2026-11-23
 - **状态**：待最终确认（Ready for User Approval — Builder Check Completed）
 - **目标平台**：Windows 11（已验证环境：Windows 11 Build 26200+，.NET 8 `net8.0-windows10.0.22621.0`）
-- **暂定代号**：`GlassShell`（Designer Call，开源发布前可随时更名）
+- **暂定代号**：`TahoeDesk`（Designer Call，开源发布前可随时更名）
 
 ---
 
@@ -73,15 +73,15 @@
 项目按职责清晰拆分为 3 个可执行/类库工程与测试工程，方便后续在 GitHub 开源协作：
 
 ```text
-GlassShell.sln
+TahoeDesk.sln
 ├── src/
-│   ├── GlassShell.Core/          # 纯 Windows 系统互操作层（无 WPF 依赖，可独立单测）
+│   ├── TahoeDesk.Core/          # 纯 Windows 系统互操作层（无 WPF 依赖，可独立单测）
 │   │   ├── Shell/                # 任务栏隐藏/恢复/防弹回、AppBar、全屏检测、Win 键低级钩子
 │   │   ├── MenuEngine/           # 前台窗口追踪 + 静默式三级菜单提取与触发引擎 + 应用菜单配置表
 │   │   ├── SystemControl/        # Wi-Fi、蓝牙、CoreAudio 音量、屏幕亮度、WinRT 媒体会话、电池、输入法
 │   │   ├── Discovery/            # 窗口枚举、最小化前快照缓存、高清图标提取、已安装应用扫描、回收站状态
 │   │   └── Search/               # Spotlight 本地索引、模糊/拼音首字母匹配、即时计算器
-│   ├── GlassShell.UI/            # WPF + DXGI/D3D11 液态玻璃展示层与物理动效层
+│   ├── TahoeDesk.UI/            # WPF + DXGI/D3D11 液态玻璃展示层与物理动效层
 │   │   ├── Glass/                # DXGI 局部桌面采样器、D3D11 HLSL 液态玻璃着色器、Squircle 胶囊渲染、壁纸明暗采样
 │   │   ├── MenuBar/              # 顶部菜单栏 + 级联液态玻璃下拉菜单 + 状态图标 + 精简日历卡片
 │   │   ├── Dock/                 # 底部悬浮程序坞 + 高斯放大 + 弹簧弹跳 + 气泡 + 堆栈 + 拖拽
@@ -89,9 +89,9 @@ GlassShell.sln
 │   │   ├── Spotlight/            # 居中悬浮聚焦搜索框与预览面板
 │   │   ├── Launchpad/            # 全屏模糊应用启动台与文件夹分组
 │   │   └── Settings/             # 极简 macOS 风格设置页
-│   └── GlassShell.Watchdog/      # 极轻量独立守护进程（主进程异常退出时毫秒级恢复原生任务栏）
+│   └── TahoeDesk.Watchdog/      # 极轻量独立守护进程（主进程异常退出时毫秒级恢复原生任务栏）
 └── tests/
-    └── GlassShell.Core.Tests/    # 菜单引擎、Win 键拦截状态机、计算器/搜索排序、配置与恢复逻辑测试
+    └── TahoeDesk.Core.Tests/    # 菜单引擎、Win 键拦截状态机、计算器/搜索排序、配置与恢复逻辑测试
 ```
 
 ---
@@ -102,15 +102,15 @@ GlassShell.sln
    - 启动时隐藏 `Shell_TrayWnd`（及多屏场景下仅作用于主屏或按策略处理），并注册顶部 **28 DIP** 高度的 `SHAppBarMessage` 工作区，确保最大化窗口顶边恰好贴齐菜单栏下沿。
    - 监听 `TaskbarCreated`（处理 `explorer.exe` 重启）及 `EVENT_OBJECT_SHOW`（监控 `Shell_TrayWnd`）：非用户主动“临时查看托盘”状态下，若系统通知等事件导致原生任务栏试图重新显示，自动将其重新隐藏，防止盖住 Dock。
 2. **第三方系统托盘临时呼出（用户已确认）**：
-   - 顶栏右侧提供一个低调的托盘展开按钮（如小折叠箭头）。点击后：GlassShell **平滑收起底部 Dock** 并临时取消隐藏屏幕底部的原生任务栏（同时聚焦系统托盘区域），方便用户点击微信、代理工具等第三方托盘图标；当用户点击空白区域、完成操作或再次点击顶栏按钮后，自动重新隐藏原生任务栏并恢复 Dock。
+   - 顶栏右侧提供一个低调的托盘展开按钮（如小折叠箭头）。点击后：TahoeDesk **平滑收起底部 Dock** 并临时取消隐藏屏幕底部的原生任务栏（同时聚焦系统托盘区域），方便用户点击微信、代理工具等第三方托盘图标；当用户点击空白区域、完成操作或再次点击顶栏按钮后，自动重新隐藏原生任务栏并恢复 Dock。
 3. **拦截单按 `Win` 键呼出启动台（用户已确认）**：
    - 使用低级键盘钩子（`WH_KEYBOARD_LL`）实现精准的单键状态机：
      - **仅当 `LWin` 或 `RWin` 单独按下并松开、期间未触发任何其他按键或鼠标组合操作时**，吞掉开始菜单触发，改为切换显示/隐藏 **Launchpad（启动台）**。
      - **完整放行所有 `Win + 任意键` 组合热键**（`Win+E`、`Win+D`、`Win+L`、`Win+V`、`Win+Shift+S`、`Win+Tab`、`Win+N`、`Win+方向键` 等），确保零破坏 Windows 原生效率体验。
 4. **三层防“失联”恢复保障**：
    - **正常退出**：`App.OnExit` 与 `SystemEvents.SessionEnding` 同步撤销 AppBar、卸载键盘钩子并恢复原生任务栏。
-   - **独立看门狗进程（`GlassShell.Watchdog`）**：通过 `WaitForSingleObject` 零 CPU 占用阻塞监听主进程句柄；一旦主进程崩溃或被任务管理器强杀，看门狗在 100ms 内自动还原原生任务栏显示并清理残余状态。
-   - **命令行急救入口**：支持 `GlassShell.exe --restore-taskbar` 一键恢复。
+   - **独立看门狗进程（`TahoeDesk.Watchdog`）**：通过 `WaitForSingleObject` 零 CPU 占用阻塞监听主进程句柄；一旦主进程崩溃或被任务管理器强杀，看门狗在 100ms 内自动还原原生任务栏显示并清理残余状态。
+   - **命令行急救入口**：支持 `TahoeDesk.exe --restore-taskbar` 一键恢复。
 5. **全屏自动避让与多屏策略（Designer Call）**：
    - 结合 `SHQueryUserNotificationState` 与前景窗口矩形判定（排除桌面 `Progman`/`WorkerW`），检测到全屏游戏或全屏视频时自动平滑隐藏顶栏与 Dock，退出全屏后立刻恢复。
    - v1 聚焦**主显示器**，以 `MonitorContext` 封装屏幕几何与 DPI，方便 v2 扩展至多显示器。
@@ -139,7 +139,7 @@ GlassShell.sln
 
 1. **轻量 DXGI 桌面局部采样管线**：
    - 使用 DXGI `IDXGIOutputDuplication`（配合 Direct3D 11 离屏纹理）捕获桌面画面，仅裁剪更新 **顶栏区域（若开启底色）与 Dock 胶囊矩形区域** 对应的背景纹理；利用 `DesktopDuplication` 的脏矩形机制（Dirty Rects）与按需更新策略（静止桌面几乎 0 GPU 占用，动画/窗口拖动时同步至显示器 60/120Hz 刷新率），将显存与 GPU 开销压到最低。
-   - 对自身窗口区域设置 `WDA_EXCLUDEFROMCAPTURE`（Windows 11 原生支持），防止采样器把 GlassShell 自身拍进去产生“无限套娃反馈”！
+   - 对自身窗口区域设置 `WDA_EXCLUDEFROMCAPTURE`（Windows 11 原生支持），防止采样器把 TahoeDesk 自身拍进去产生“无限套娃反馈”！
 2. **D3D11 HLSL 液态玻璃着色器**：
    - **多通高斯模糊（Kawase / Dual-Filter Blur）**：高效获得丝滑奶油状背景虚化。
    - **边缘光学折射（Edge Refraction）**：在 Squircle 胶囊边缘一定像素带宽内，按法线方向对采样坐标施加平滑折射偏移（模拟曲面玻璃折射后方壁纸与窗口色彩的效果）。
@@ -155,7 +155,7 @@ GlassShell.sln
 #### 1. 顶部菜单栏（`MenuBarWindow`）
 - **尺寸与形态**：屏幕顶部通栏，高度 **28 DIP**；默认完全通透悬浮在壁纸上方（Tahoe 默认风格），支持在设置中开启「显示菜单栏液态玻璃底色」。
 - **左侧区域**：
-  - **Win11 Logo 菜单**：关于本机（自绘 macOS 风格简洁本机硬件卡片）、系统设置（GlassShell 设置 + 快捷直达 Windows 设置）、Microsoft Store、最近使用的项目、强制退出（简洁进程结束浮窗）、睡眠、重新启动、关机、锁定屏幕、注销。
+  - **Win11 Logo 菜单**：关于本机（自绘 macOS 风格简洁本机硬件卡片）、系统设置（TahoeDesk 设置 + 快捷直达 Windows 设置）、Microsoft Store、最近使用的项目、强制退出（简洁进程结束浮窗）、睡眠、重新启动、关机、锁定屏幕、注销。
   - **当前活动应用名（加粗）**：关于该应用、隐藏窗口、退出（`Alt+F4`）、强制退出。
   - **动态全局菜单**：由 `MenuEngine` 驱动；支持点开某菜单后鼠标横向滑过相邻一级菜单自动无缝切换展开；采用液态玻璃圆角下拉浮层、系统蓝胶囊悬停高亮、不可用项置灰显示、右对齐快捷键提示。
 - **右侧区域（Menu Bar Extras）**：
@@ -186,7 +186,7 @@ GlassShell.sln
 #### 3. 控制中心（`ControlCenterPopup`）
 - 点击右上角控制中心图标在下方平滑展开 Liquid Glass Bento 圆角模块卡片（**Designer Call**：严格仅使用公开 WinRT/Win32 API，避免重造整套系统网络/配对设置）：
   - **连接模块**：Wi-Fi 开关（显示当前 SSID + 快捷跳转 Windows Wi-Fi 设置）、蓝牙电源开关（+ 快捷跳转蓝牙设置）、剪贴板/共享快捷入口（触发原生 `Win+V` / 就近共享）。
-  - **状态模块**：专注/勿扰快捷入口（跳转 Windows 专注设置或提供 GlassShell 本地静音徽标，不碰未公开 WNF 接口）、外观快捷切换（浅色 / 深色 / 自动）。
+  - **状态模块**：专注/勿扰快捷入口（跳转 Windows 专注设置或提供 TahoeDesk 本地静音徽标，不碰未公开 WNF 接口）、外观快捷切换（浅色 / 深色 / 自动）。
   - **亮度滑块**：圆角胶囊滑块（笔记本 WMI + 外接屏 DDC/CI；不支持调节的屏幕自动置灰或隐藏）。
   - **音量滑块**：圆角胶囊滑块 + 动态音量图标 + CoreAudio 音频输出设备快速切换。
   - **正在播放卡片**：WinRT SMTC 实时读取当前媒体封面、歌名、歌手与播放控制按钮。
@@ -216,7 +216,7 @@ GlassShell.sln
 ## 6. 分阶段交付路线（Phased Delivery）
 
 - **阶段一（MVP 日常主力可用版）**：
-  - 安装 `.NET 8 SDK` 并搭建 `GlassShell.sln` 工程结构。
+  - 安装 `.NET 8 SDK` 并搭建 `TahoeDesk.sln` 工程结构。
   - 交付安全隐藏原生任务栏 + 防弹回状态机 + 独立看门狗恢复 + 顶部 AppBar + 全屏自动避让 + 顶栏托盘临时呼出。
   - 交付 **DXGI 局部桌面采样 + D3D11 HLSL 液态玻璃引擎**（真 Squircle、边缘光学折射、高光描边、柔和阴影、`WDA_EXCLUDEFROMCAPTURE`）。
   - 交付 **顶部菜单栏 + 绝对静默三级前台应用菜单引擎**（Win32 `GetMenu` + 静态 UIA + 高频应用 JSON 配置表 + 通用菜单）+ 精简日历卡片。
@@ -239,5 +239,5 @@ GlassShell.sln
 - 具体 Win32 / COM / Direct3D 11 绑定选型（如 `Vortice.Direct3D11` + `Vortice.DXGI` vs 手写精简 COM Interop，`CsWin32` vs 手写 P/Invoke）。
 - CoreAudio 与 DDC/CI 封装库（如 `NAudio` 或轻量级原生 COM 封装）。
 - 拼音首字母匹配轻量库或内置汉字首字母映射表实现方式。
-- 本地配置文件的精确 JSON Schema、存储路径（默认 `%LocalAppData%\GlassShell\`）及日志框架选型。
+- 本地配置文件的精确 JSON Schema、存储路径（默认 `%LocalAppData%\TahoeDesk\`）及日志框架选型。
 - HLSL 着色器具体折射率/模糊半径/高光衰减参数与弹簧/高斯曲线阻尼常数（以视觉贴近 macOS Tahoe 为验收标准）。
