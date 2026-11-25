@@ -403,7 +403,7 @@ public partial class MenuBarWindow : Window
         new("锁定屏幕", "Win+L", OnClick: () => LockWorkStation()),
         new("注销当前用户…", OnClick: () => ExitWindowsEx(0, 0)),
         new(string.Empty, IsSeparator: true),
-        new("退出 GlassShell", OnClick: () => RestoreNativeTaskbarRequested?.Invoke())
+        new("退出 TahoeDesk", OnClick: () => RestoreNativeTaskbarRequested?.Invoke())
     ];
 
     private IReadOnlyList<PopupMenuEntry> BuildWinPowerUserMenu() =>

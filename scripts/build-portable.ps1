@@ -18,14 +18,14 @@ if (-not (Test-Path $dotnet)) {
 
 $distRoot = Join-Path $repoRoot "dist"
 $flavor = if ($SelfContained) { "win-x64-standalone" } else { "win-x64-portable" }
-$stageDir = Join-Path $distRoot "GlassShell-v$Version-$flavor"
+$stageDir = Join-Path $distRoot "TahoeDesk-v$Version-$flavor"
 $zipPath = "$stageDir.zip"
 
-Write-Host "[GlassShell] Building Watchdog (Release)..." -ForegroundColor Cyan
+Write-Host "[TahoeDesk] Building Watchdog (Release)..." -ForegroundColor Cyan
 & $dotnet build (Join-Path $repoRoot "src\GlassShell.Watchdog\GlassShell.Watchdog.csproj") -c Release --no-restore -m:1 /nr:false --verbosity minimal
 if ($LASTEXITCODE -ne 0) { throw "Watchdog build failed." }
 
-Write-Host "[GlassShell] Building GlassShell.UI (Release)..." -ForegroundColor Cyan
+Write-Host "[TahoeDesk] Building TahoeDesk UI (Release)..." -ForegroundColor Cyan
 if ($SelfContained) {
     & $dotnet publish (Join-Path $repoRoot "src\GlassShell.UI\GlassShell.UI.csproj") -c Release -r win-x64 --self-contained true -p:PublishReadyToRun=true -o $stageDir --verbosity minimal
     if ($LASTEXITCODE -ne 0) { throw "Self-contained publish failed." }
@@ -48,7 +48,7 @@ if ($SelfContained) {
 # Include emergency native taskbar recovery script + docs
 $restoreCmd = @"
 @echo off
-title GlassShell - Restore Windows Taskbar
+title TahoeDesk - Restore Windows Taskbar
 echo Restoring native Windows taskbar...
 start "" "%~dp0GlassShell.UI.exe" --restore-taskbar
 "@
@@ -62,4 +62,4 @@ Add-Type -AssemblyName System.IO.Compression.FileSystem
 [System.IO.Compression.ZipFile]::CreateFromDirectory($stageDir, $zipPath, [System.IO.Compression.CompressionLevel]::Optimal, $false)
 
 $zipSizeMB = [math]::Round((Get-Item $zipPath).Length / 1MB, 2)
-Write-Host "[GlassShell] Portable package ready: $zipPath ($zipSizeMB MB)" -ForegroundColor Green
+Write-Host "[TahoeDesk] Portable package ready: $zipPath ($zipSizeMB MB)" -ForegroundColor Green

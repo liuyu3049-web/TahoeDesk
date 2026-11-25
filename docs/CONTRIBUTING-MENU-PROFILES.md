@@ -1,6 +1,6 @@
 # 应用菜单 JSON 配置贡献指南 (Contributing Menu Profiles)
 
-GlassShell 顶部菜单栏采用「三级绝对静默」策略：
+TahoeDesk 顶部菜单栏采用「三级绝对静默」策略：
 1. **Win32 原生 `GetMenu`**：直接读取传统 Win32 应用菜单树。
 2. **静态 UI Automation**：针对标准 UIA 菜单栏的只读提取（绝不触发弹窗或抢焦点）。
 3. **内置高频应用 JSON 配置表**：为 Chrome、Edge、VS Code、微信、文件资源管理器等自绘标题栏应用提供原生级菜单与快捷键映射。

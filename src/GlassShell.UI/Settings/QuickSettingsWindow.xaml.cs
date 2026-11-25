@@ -50,7 +50,7 @@ public partial class QuickSettingsWindow : Window
         SelectComboByTag(LaunchpadColsCombo, settings.LaunchpadColumns.ToString());
         SelectComboByTag(LaunchpadRowsCombo, settings.LaunchpadRows.ToString());
         AutoStartCheck.IsChecked = AutoStartService.IsEnabled();
-        VersionFooterText.Text = $"GlassShell v{DiagnosticsReportBuilder.AppVersion} · Liquid Glass Desktop Shell";
+        VersionFooterText.Text = $"TahoeDesk v{DiagnosticsReportBuilder.AppVersion} · Liquid Glass Desktop Shell";
         _loading = false;
 
         SourceInitialized += (_, _) => WindowInteropHelperEx.ExcludeFromCapture(new System.Windows.Interop.WindowInteropHelper(this).Handle);

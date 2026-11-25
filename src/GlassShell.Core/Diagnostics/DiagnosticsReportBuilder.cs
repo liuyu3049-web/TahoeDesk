@@ -27,7 +27,7 @@ public static class DiagnosticsReportBuilder
     {
         var sb = new StringBuilder();
         sb.AppendLine("========================================");
-        sb.AppendLine($"GlassShell Diagnostics Report (v{AppVersion})");
+        sb.AppendLine($"TahoeDesk Diagnostics Report (v{AppVersion})");
         sb.AppendLine("========================================");
         sb.AppendLine($"Generated (UTC): {DateTime.UtcNow:yyyy-MM-dd HH:mm:ss}Z");
         sb.AppendLine($"OS Version     : {Environment.OSVersion}");

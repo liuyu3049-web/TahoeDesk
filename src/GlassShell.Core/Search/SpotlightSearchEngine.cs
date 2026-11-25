@@ -19,13 +19,13 @@ public sealed class SpotlightSearchEngine
         new("cmd:sleep", "睡眠", "系统命令 · 挂起电脑", "sleep shuimian sm 睡眠 休眠"),
         new("cmd:restart", "重新启动", "系统命令 · 重启 Windows", "restart reboot chongqi cq 重启 重新启动"),
         new("cmd:shutdown", "关机", "系统命令 · 关闭电脑", "shutdown guanji gj 关机"),
-        new("cmd:theme-dark", "切换深色外观", "GlassShell 外观", "dark shense ss 深色 暗色 夜间模式"),
-        new("cmd:theme-light", "切换浅色外观", "GlassShell 外观", "light qianse qs 浅色 亮色 日间模式"),
-        new("cmd:theme-system", "外观跟随系统", "GlassShell 外观", "auto system gensui 自动 跟随系统"),
+        new("cmd:theme-dark", "切换深色外观", "TahoeDesk 外观", "dark shense ss 深色 暗色 夜间模式"),
+        new("cmd:theme-light", "切换浅色外观", "TahoeDesk 外观", "light qianse qs 浅色 亮色 日间模式"),
+        new("cmd:theme-system", "外观跟随系统", "TahoeDesk 外观", "auto system gensui 自动 跟随系统"),
         new("cmd:empty-bin", "清倒回收站", "系统命令 · 清空回收站", "trash recycle bin qingkong hsz 清空回收站 清倒回收站"),
-        new("cmd:settings", "打开 GlassShell 设置", "系统偏好设置", "settings shezhi sz 设置 偏好设置"),
+        new("cmd:settings", "打开 TahoeDesk 设置", "系统偏好设置", "settings shezhi sz 设置 偏好设置"),
         new("cmd:win-settings", "打开 Windows 设置", "系统命令 · ms-settings", "windows settings xitongshezhi 系统设置"),
-        new("cmd:restore-taskbar", "退出 GlassShell", "退出并恢复系统任务栏", "exit quit tuichu restore taskbar 退出 恢复原生任务栏")
+        new("cmd:restore-taskbar", "退出 TahoeDesk", "退出并恢复系统任务栏", "exit quit tuichu restore taskbar 退出 恢复原生任务栏")
     ];
 
     public IReadOnlyList<SpotlightResult> Search(

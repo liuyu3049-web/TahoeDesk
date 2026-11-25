@@ -850,7 +850,7 @@ public partial class App : Application
                 _backdropSampler?.Health ?? GlassShell.Core.Glass.SamplerHealth.FallbackDegraded,
                 crashLog);
             string desktop = Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory);
-            string outPath = Path.Combine(desktop, $"GlassShell-Diagnostics-{DateTime.Now:yyyyMMdd-HHmmss}.txt");
+            string outPath = Path.Combine(desktop, $"TahoeDesk-Diagnostics-{DateTime.Now:yyyyMMdd-HHmmss}.txt");
             File.WriteAllText(outPath, report);
             return outPath;
         }
