@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
+using System.Threading;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using GlassShell.Core.Shell;
@@ -8,12 +9,17 @@ using GlassShell.Core.Tray;
 
 namespace GlassShell.UI.Tray;
 
-public sealed record TrayDisplayItem(TrayIconRecord Record, BitmapSource? IconBitmap);
+public sealed record TrayDisplayItem(
+    TrayIconRecord Record,
+    BitmapSource? IconBitmap,
+    bool IsFlashing = false,
+    bool IsBlinkOffPhase = false);
 
 /// <summary>
 /// Zero-injection, standard-user-privilege Win32 Shell_TrayWnd proxy host.
 /// Intercepts Shell_NotifyIcon (dwData=1) and Shell_NotifyIconGetRect (dwData=3) via WM_COPYDATA,
-/// forwards all non-tray shell messages (e.g. SHAppBarMessage dwData=0) transparently to Explorer,
+/// forwards mirrored notifications asynchronously off the UI thread (preventing cross-process deadlocks with Wallpaper Engine / Explorer),
+/// preserves last valid icon bitmaps across blank blink frames (preventing stuck black dots),
 /// and cleanly restores all icons to Explorer via TaskbarCreated on Dispose.
 /// </summary>
 public sealed class TrayProxyHost : IDisposable
@@ -36,9 +42,12 @@ public sealed class TrayProxyHost : IDisposable
 
     private readonly TrayIconRegistry _registry = new();
     private readonly Dictionary<TrayIconKey, (long Revision, BitmapSource? Bitmap)> _bitmapCache = new();
+    private readonly Dictionary<TrayIconKey, BitmapSource> _lastValidBitmaps = new();
     private readonly Dictionary<TrayIconKey, long> _lastIconModifyTicks = new();
+    private readonly Dictionary<TrayIconKey, long> _flashingUntilTicks = new();
+    private readonly HashSet<TrayIconKey> _blinkOffKeys = new();
     private readonly WndProcDelegate _wndProcDelegate;
-    private readonly DispatcherTimer _pruneTimer;
+    private readonly DispatcherTimer _maintenanceTimer;
     private readonly uint _taskbarCreatedMsg;
 
     private nint _explorerTrayHwnd;
@@ -47,24 +56,23 @@ public sealed class TrayProxyHost : IDisposable
     private bool _registeredTrayClass;
     private bool _registeredNotifyClass;
     private bool _started;
+    private bool _proxyDestroyed;
     private bool _disposed;
     private long _selfBroadcastUntilTicks;
+    private int _tickCounter;
 
     public TrayProxyHost()
     {
         _wndProcDelegate = ProxyWndProc;
         _taskbarCreatedMsg = RegisterWindowMessageW("TaskbarCreated");
 
-        _pruneTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(3) };
-        _pruneTimer.Tick += (_, _) => PruneDeadIcons();
+        _maintenanceTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(750) };
+        _maintenanceTimer.Tick += (_, _) => RunMaintenanceTick();
     }
 
     public event Action<IReadOnlyList<TrayDisplayItem>>? IconsChanged;
     public event Action<uint>? TrayIconFlashingDetected;
 
-    /// <summary>
-    /// True briefly while GlassShell itself broadcasts TaskbarCreated so MenuBarWindow doesn't mistake it for an Explorer crash.
-    /// </summary>
     public bool IsSelfBroadcastActive => Environment.TickCount64 < _selfBroadcastUntilTicks;
 
     public void Start()
@@ -98,22 +106,115 @@ public sealed class TrayProxyHost : IDisposable
             0, 0, 0, 0,
             _proxyTrayHwnd, 0, hInstance, 0);
 
-        // Allow elevated apps to deliver WM_COPYDATA tray updates to our standard-user proxy
         ChangeWindowMessageFilterEx(_proxyTrayHwnd, WM_COPYDATA, MSGFLT_ALLOW, 0);
-
-        // Ensure our proxy Shell_TrayWnd sits ahead of Explorer's Shell_TrayWnd in Z-order
-        // so shell32!FindWindow("Shell_TrayWnd") routes Shell_NotifyIcon messages here first.
         SetWindowPos(_proxyTrayHwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE);
 
         _started = true;
-        _pruneTimer.Start();
+        _maintenanceTimer.Start();
 
         BroadcastTaskbarCreated(isSelf: true);
+
+        // Delayed second sync (+2.5s) catches boot-time autostart apps (like Wallpaper Engine)
+        // that finish creating their tray windows slightly after GlassShell launches!
+        var delayedSync = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(2500) };
+        delayedSync.Tick += (_, _) =>
+        {
+            delayedSync.Stop();
+            if (!_disposed && !_proxyDestroyed)
+            {
+                ResyncAllTrayIcons();
+            }
+        };
+        delayedSync.Start();
+    }
+
+    /// <summary>
+    /// Ensures GlassShell's proxy Shell_TrayWnd stays strictly ahead of Explorer's Shell_TrayWnd in Z-order
+    /// so shell32!FindWindow("Shell_TrayWnd") ALWAYS delivers new/modified tray icons (WeChat, Wallpaper Engine, etc.) here first.
+    /// </summary>
+    public void EnsureProxyFirstInZOrder()
+    {
+        if (!_started || _disposed || _proxyDestroyed || _proxyTrayHwnd == 0) return;
+        nint first = FindWindowExW(0, 0, TrayClassName, null);
+        if (first != _proxyTrayHwnd)
+        {
+            SetWindowPos(_proxyTrayHwnd, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOACTIVATE | SWP_NOMOVE | SWP_NOSIZE);
+        }
+    }
+
+    public void ResyncAllTrayIcons()
+    {
+        if (!_started || _disposed || _proxyDestroyed || _proxyTrayHwnd == 0) return;
+        EnsureProxyFirstInZOrder();
+        BroadcastTaskbarCreated(isSelf: true);
+    }
+
+    public IReadOnlySet<string> GetActiveTrayExecutablePaths()
+    {
+        var paths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var rec in _registry.GetVisibleIcons())
+        {
+            string? path = TryResolveOwnerExePath(rec.Key.OwnerHwnd);
+            if (!string.IsNullOrWhiteSpace(path))
+            {
+                paths.Add(path);
+            }
+        }
+        return paths;
+    }
+
+    /// <summary>
+    /// Restores a background tray-resident app (such as WeChat closed with X) by simulating a tray click
+    /// on its registered tray icon instead of launching a duplicate process/window.
+    /// </summary>
+    public bool TryActivateTrayAppByExePath(string exePath)
+    {
+        if (string.IsNullOrWhiteSpace(exePath)) return false;
+        string targetNorm = exePath.Trim().TrimEnd('\\');
+
+        TrayIconRecord? match = null;
+        foreach (var rec in _registry.GetVisibleIcons())
+        {
+            string? ownerExe = TryResolveOwnerExePath(rec.Key.OwnerHwnd);
+            if (!string.IsNullOrWhiteSpace(ownerExe)
+                && string.Equals(ownerExe.Trim().TrimEnd('\\'), targetNorm, StringComparison.OrdinalIgnoreCase))
+            {
+                match = rec;
+                break;
+            }
+        }
+
+        if (match is null) return false;
+
+        int sx = match.LastScreenRect.Width > 0 ? (match.LastScreenRect.Left + match.LastScreenRect.Right) / 2 : 1200;
+        int sy = match.LastScreenRect.Height > 0 ? match.LastScreenRect.Bottom : 28;
+        DispatchMouseAction(match, TrayMouseAction.LeftClick, sx, sy);
+        return true;
+    }
+
+    private static string? TryResolveOwnerExePath(nint ownerHwnd)
+    {
+        if (ownerHwnd == 0 || !IsWindow(ownerHwnd)) return null;
+        GetWindowThreadProcessId(ownerHwnd, out uint pid);
+        if (pid == 0) return null;
+
+        nint hProc = OpenProcess(0x1000 /* PROCESS_QUERY_LIMITED_INFORMATION */, false, pid);
+        if (hProc == 0) return null;
+        try
+        {
+            var sb = new System.Text.StringBuilder(520);
+            int cap = sb.Capacity;
+            return QueryFullProcessImageNameW(hProc, 0, sb, ref cap) ? sb.ToString() : null;
+        }
+        finally
+        {
+            CloseHandle(hProc);
+        }
     }
 
     public void HandleExternalExplorerRestart()
     {
-        if (!_started || _disposed) return;
+        if (!_started || _disposed || _proxyDestroyed) return;
         _explorerTrayHwnd = Win32TaskbarNative.FindExplorerPrimaryTaskbar();
         if (_proxyTrayHwnd != 0)
         {
@@ -129,21 +230,33 @@ public sealed class TrayProxyHost : IDisposable
 
     public IReadOnlyList<TrayDisplayItem> GetCurrentItems()
     {
+        long now = Environment.TickCount64;
         var visible = _registry.GetVisibleIcons();
         var result = new List<TrayDisplayItem>(visible.Count);
         foreach (var rec in visible)
         {
             BitmapSource? bmp = null;
-            if (_bitmapCache.TryGetValue(rec.Key, out var cached) && cached.Revision == rec.IconRevision)
+            if (_bitmapCache.TryGetValue(rec.Key, out var cached) && cached.Revision == rec.IconRevision && cached.Bitmap is not null)
             {
                 bmp = cached.Bitmap;
+            }
+            else if (_lastValidBitmaps.TryGetValue(rec.Key, out var valid))
+            {
+                bmp = valid;
             }
             else
             {
                 bmp = TrayIconBitmapConverter.ConvertFromHIcon(rec.IconHandle, rec.Key.OwnerHwnd);
-                _bitmapCache[rec.Key] = (rec.IconRevision, bmp);
+                if (bmp is not null)
+                {
+                    _bitmapCache[rec.Key] = (rec.IconRevision, bmp);
+                    _lastValidBitmaps[rec.Key] = bmp;
+                }
             }
-            result.Add(new TrayDisplayItem(rec, bmp));
+
+            bool isFlashing = _flashingUntilTicks.TryGetValue(rec.Key, out long until) && now < until;
+            bool blinkOff = isFlashing && _blinkOffKeys.Contains(rec.Key);
+            result.Add(new TrayDisplayItem(rec, bmp, isFlashing, blinkOff));
         }
         return result;
     }
@@ -156,7 +269,10 @@ public sealed class TrayProxyHost : IDisposable
             return;
         }
 
-        // Grant foreground activation so the target app's native context menu opens and auto-dismisses properly
+        // User interacted with this tray icon -> immediately clear any active blink state
+        _flashingUntilTicks.Remove(icon.Key);
+        _blinkOffKeys.Remove(icon.Key);
+
         GetWindowThreadProcessId(icon.Key.OwnerHwnd, out uint pid);
         if (pid != 0)
         {
@@ -199,23 +315,50 @@ public sealed class TrayProxyHost : IDisposable
                     if (cmd.Kind == TrayCommandKind.Delete && updated is not null)
                     {
                         _bitmapCache.Remove(updated.Key);
+                        _lastValidBitmaps.Remove(updated.Key);
+                        _lastIconModifyTicks.Remove(updated.Key);
+                        _flashingUntilTicks.Remove(updated.Key);
+                        _blinkOffKeys.Remove(updated.Key);
                     }
                     else if (updated is not null)
                     {
-                        // Eagerly capture HICON synchronously inside WM_COPYDATA while the sender's HICON is guaranteed valid!
-                        if (!_bitmapCache.TryGetValue(updated.Key, out var cached) || cached.Revision != updated.IconRevision)
-                        {
-                            var bmp = TrayIconBitmapConverter.ConvertFromHIcon(updated.IconHandle, updated.Key.OwnerHwnd);
-                            _bitmapCache[updated.Key] = (updated.IconRevision, bmp);
+                        long nowTicks = Environment.TickCount64;
+                        bool iconFlagSet = (cmd.Flags & NotifyIconFlags.Icon) != 0;
 
-                            // Detect rapid tray icon blink (e.g. WeChat/QQ swapping icon every ~400ms on new message!)
-                            if (cmd.Kind == TrayCommandKind.Modify && (cmd.Flags & NotifyIconFlags.Icon) != 0 && cmd.OwnerHwnd != 0)
+                        if (iconFlagSet || !_lastValidBitmaps.ContainsKey(updated.Key))
+                        {
+                            var bmp = TrayIconBitmapConverter.ConvertFromHIcon(
+                                updated.IconHandle,
+                                updated.Key.OwnerHwnd,
+                                out bool isBlankFrame);
+
+                            if (bmp is not null)
                             {
-                                long nowTicks = Environment.TickCount64;
+                                _bitmapCache[updated.Key] = (updated.IconRevision, bmp);
+                                _lastValidBitmaps[updated.Key] = bmp;
+                                _blinkOffKeys.Remove(updated.Key);
+                            }
+                            else if (isBlankFrame && _lastValidBitmaps.TryGetValue(updated.Key, out var kept))
+                            {
+                                // App swapped to blank/transparent icon to blink (e.g. WeChat/QQ new message):
+                                // keep the valid icon (NEVER turn into a black dot!) and show subtle blink phase!
+                                _bitmapCache[updated.Key] = (updated.IconRevision, kept);
+                                _blinkOffKeys.Add(updated.Key);
+                                _flashingUntilTicks[updated.Key] = nowTicks + 1600;
+                                NotifyOwnerPidFlashing(cmd.OwnerHwnd);
+                            }
+
+                            if (cmd.Kind == TrayCommandKind.Modify && iconFlagSet && cmd.OwnerHwnd != 0)
+                            {
                                 if (_lastIconModifyTicks.TryGetValue(updated.Key, out long prevTicks) && (nowTicks - prevTicks) <= 1500)
                                 {
-                                    GetWindowThreadProcessId(cmd.OwnerHwnd, out uint ownerPid);
-                                    if (ownerPid != 0) TrayIconFlashingDetected?.Invoke(ownerPid);
+                                    _flashingUntilTicks[updated.Key] = nowTicks + 1600;
+                                    if (bmp is not null && !isBlankFrame)
+                                    {
+                                        // App alternates between two non-blank icons -> toggle gentle blink indicator
+                                        if (!_blinkOffKeys.Add(updated.Key)) _blinkOffKeys.Remove(updated.Key);
+                                    }
+                                    NotifyOwnerPidFlashing(cmd.OwnerHwnd);
                                 }
                                 _lastIconModifyTicks[updated.Key] = nowTicks;
                             }
@@ -225,9 +368,8 @@ public sealed class TrayProxyHost : IDisposable
                     RaiseIconsChanged();
                 }
 
-                // Mirror to Explorer in the background (with short abort-if-hung timeout) so Windows toast
-                // notifications (NIF_INFO) and emergency native taskbar fallback stay 100% intact.
-                ForwardToExplorer(WM_COPYDATA, wParam, lParam);
+                // Mirror asynchronously on background thread so ProxyWndProc returns in <0.1ms and NEVER deadlocks Wallpaper Engine / Explorer!
+                ForwardCopyDataAsync(cds.dwData, wParam, buffer);
                 return 1;
             }
         }
@@ -249,6 +391,44 @@ public sealed class TrayProxyHost : IDisposable
         return ForwardToExplorer(WM_COPYDATA, wParam, lParam);
     }
 
+    private void NotifyOwnerPidFlashing(nint ownerHwnd)
+    {
+        if (ownerHwnd == 0) return;
+        GetWindowThreadProcessId(ownerHwnd, out uint ownerPid);
+        if (ownerPid != 0)
+        {
+            TrayIconFlashingDetected?.Invoke(ownerPid);
+        }
+    }
+
+    private void ForwardCopyDataAsync(nint dwData, nint senderWParam, byte[] copiedPayload)
+    {
+        if (_disposed || _proxyDestroyed) return;
+        nint target = _explorerTrayHwnd;
+        if (target == 0 || target == _proxyTrayHwnd) return;
+
+        ThreadPool.QueueUserWorkItem(_state =>
+        {
+            if (_disposed || !IsWindow(target)) return;
+            var handle = GCHandle.Alloc(copiedPayload, GCHandleType.Pinned);
+            try
+            {
+                var copyCds = new COPYDATASTRUCT
+                {
+                    dwData = dwData,
+                    cbData = copiedPayload.Length,
+                    lpData = handle.AddrOfPinnedObject()
+                };
+                SendMessageTimeoutCopyData(target, WM_COPYDATA, senderWParam, ref copyCds, SMTO_ABORTIFHUNG, 50, out _);
+            }
+            catch { }
+            finally
+            {
+                handle.Free();
+            }
+        });
+    }
+
     private nint ForwardToExplorer(uint msg, nint wParam, nint lParam)
     {
         if (_explorerTrayHwnd == 0 || !IsWindow(_explorerTrayHwnd))
@@ -261,30 +441,84 @@ public sealed class TrayProxyHost : IDisposable
             return 0;
         }
 
-        return SendMessageTimeoutW(_explorerTrayHwnd, msg, wParam, lParam, SMTO_ABORTIFHUNG, 120, out nint result) != 0
+        return SendMessageTimeoutW(_explorerTrayHwnd, msg, wParam, lParam, SMTO_ABORTIFHUNG, 80, out nint result) != 0
             ? result
             : 0;
+    }
+
+    private void RunMaintenanceTick()
+    {
+        if (_disposed) return;
+
+        EnsureProxyFirstInZOrder();
+
+        bool uiNeedsRefresh = false;
+        long now = Environment.TickCount64;
+
+        // Expire any finished message-blink animations cleanly so icons ALWAYS return to full opacity!
+        if (_flashingUntilTicks.Count > 0)
+        {
+            var expired = new List<TrayIconKey>();
+            foreach (var (key, until) in _flashingUntilTicks)
+            {
+                if (now >= until) expired.Add(key);
+            }
+            foreach (var k in expired)
+            {
+                _flashingUntilTicks.Remove(k);
+                _blinkOffKeys.Remove(k);
+                uiNeedsRefresh = true;
+            }
+        }
+
+        // Every ~3s (every 4 ticks), prune closed tray owners
+        if ((++_tickCounter % 4) == 0)
+        {
+            if (PruneDeadIconsInternal())
+            {
+                uiNeedsRefresh = true;
+            }
+        }
+
+        if (uiNeedsRefresh)
+        {
+            RaiseIconsChanged();
+        }
     }
 
     private void PruneDeadIcons()
     {
         if (_disposed) return;
-        if (_registry.PruneDeadWindows(hwnd => IsWindow(hwnd)))
+        if (PruneDeadIconsInternal())
         {
-            var alive = new HashSet<TrayIconKey>();
-            foreach (var rec in _registry.GetVisibleIcons())
-            {
-                alive.Add(rec.Key);
-            }
-            var staleKeys = new List<TrayIconKey>();
-            foreach (var key in _bitmapCache.Keys)
-            {
-                if (!alive.Contains(key)) staleKeys.Add(key);
-            }
-            foreach (var k in staleKeys) _bitmapCache.Remove(k);
-
             RaiseIconsChanged();
         }
+    }
+
+    private bool PruneDeadIconsInternal()
+    {
+        if (!_registry.PruneDeadWindows(hwnd => IsWindow(hwnd))) return false;
+
+        var alive = new HashSet<TrayIconKey>();
+        foreach (var rec in _registry.GetVisibleIcons())
+        {
+            alive.Add(rec.Key);
+        }
+
+        var staleKeys = new List<TrayIconKey>();
+        foreach (var key in _bitmapCache.Keys)
+        {
+            if (!alive.Contains(key)) staleKeys.Add(key);
+        }
+        foreach (var k in staleKeys)
+        {
+            _bitmapCache.Remove(k);
+            _lastValidBitmaps.Remove(k);
+            _lastIconModifyTicks.Remove(k);
+            _flashingUntilTicks.Remove(k);
+            _blinkOffKeys.Remove(k);
+        }
+        return true;
     }
 
     private void RaiseIconsChanged()
@@ -314,12 +548,16 @@ public sealed class TrayProxyHost : IDisposable
         return RegisterClassExW(ref wc) != 0;
     }
 
-    public void Dispose()
+    /// <summary>
+    /// Destroys the proxy Shell_TrayWnd BEFORE restoring Explorer's taskbar so no app (such as Wallpaper Engine)
+    /// ever sends messages to a half-disposed proxy during shutdown.
+    /// </summary>
+    public void DestroyProxyWindowOnly()
     {
-        if (_disposed) return;
-        _disposed = true;
+        if (_proxyDestroyed) return;
+        _proxyDestroyed = true;
 
-        try { _pruneTimer.Stop(); } catch { }
+        try { _maintenanceTimer.Stop(); } catch { }
 
         if (_proxyNotifyHwnd != 0)
         {
@@ -333,12 +571,20 @@ public sealed class TrayProxyHost : IDisposable
         }
 
         nint hInstance = GetModuleHandleW(null);
-        if (_registeredNotifyClass) UnregisterClassW(NotifyClassName, hInstance);
-        if (_registeredTrayClass) UnregisterClassW(TrayClassName, hInstance);
+        if (_registeredNotifyClass) { UnregisterClassW(NotifyClassName, hInstance); _registeredNotifyClass = false; }
+        if (_registeredTrayClass) { UnregisterClassW(TrayClassName, hInstance); _registeredTrayClass = false; }
+    }
+
+    public void Dispose()
+    {
+        if (_disposed) return;
+        _disposed = true;
+
+        DestroyProxyWindowOnly();
 
         if (_started)
         {
-            // Ask all running apps to immediately re-register onto Explorer's restored native taskbar
+            // Ask all running apps to cleanly re-register onto Explorer's already-restored native taskbar
             BroadcastTaskbarCreated(isSelf: false);
         }
     }
@@ -411,6 +657,9 @@ public sealed class TrayProxyHost : IDisposable
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern nint SendMessageTimeoutW(nint hWnd, uint msg, nint wParam, nint lParam, uint fuFlags, uint uTimeout, out nint lpdwResult);
 
+    [DllImport("user32.dll", CharSet = CharSet.Unicode, EntryPoint = "SendMessageTimeoutW")]
+    private static extern nint SendMessageTimeoutCopyData(nint hWnd, uint msg, nint wParam, ref COPYDATASTRUCT lParam, uint fuFlags, uint uTimeout, out nint lpdwResult);
+
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool PostMessageW(nint hWnd, uint msg, nint wParam, nint lParam);
@@ -429,4 +678,18 @@ public sealed class TrayProxyHost : IDisposable
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool SetForegroundWindow(nint hWnd);
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    private static extern nint FindWindowExW(nint hwndParent, nint hwndChildAfter, string lpszClass, string? lpszWindow);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern nint OpenProcess(uint dwDesiredAccess, [MarshalAs(UnmanagedType.Bool)] bool bInheritHandle, uint dwProcessId);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool QueryFullProcessImageNameW(nint hProcess, int dwFlags, System.Text.StringBuilder lpExeName, ref int lpdwSize);
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool CloseHandle(nint hObject);
 }

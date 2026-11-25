@@ -35,8 +35,11 @@ public sealed record GlassSettings
     public double DockMagnificationScale { get; init; } = 1.6;
     public DockAutoHideMode DockAutoHide { get; init; } = DockAutoHideMode.Smart;
     public bool ShowRecentApps { get; init; } = true;
+    public bool HarmonizeDockIcons { get; init; } = false;
     public bool ShowMinimizedWindowsInDock { get; init; } = false;
     public bool InterceptWinKeyForLaunchpad { get; init; } = true;
+    public int LaunchpadColumns { get; init; } = 7;
+    public int LaunchpadRows { get; init; } = 5;
     public string SpotlightHotkey { get; init; } = "Alt+Space";
     public IReadOnlyList<string> PinnedAppPaths { get; init; } = [];
     public IReadOnlyList<string> PinnedFolderPaths { get; init; } = [];

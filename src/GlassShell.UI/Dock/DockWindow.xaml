@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:dock="clr-namespace:GlassShell.UI.Dock"
         xmlns:glass="clr-namespace:GlassShell.UI.Glass"
-        Title="GlassShell Dock"
+        Title="TahoeDesk Dock"
         Height="162"
         Width="720"
         WindowStyle="None"

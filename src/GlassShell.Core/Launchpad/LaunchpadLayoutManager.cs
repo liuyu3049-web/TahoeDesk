@@ -13,9 +13,15 @@ namespace GlassShell.Core.Launchpad;
 /// </summary>
 public sealed class LaunchpadLayoutManager
 {
-    public const int Columns = 7;
-    public const int Rows = 5;
-    public const int ItemsPerPage = Columns * Rows; // 35
+    public int Columns { get; private set; } = 7;
+    public int Rows { get; private set; } = 5;
+    public int ItemsPerPage => Columns * Rows;
+
+    public void SetGridSize(int columns, int rows)
+    {
+        Columns = Math.Clamp(columns, 4, 10);
+        Rows = Math.Clamp(rows, 3, 8);
+    }
 
     private static readonly string[] AuxiliaryKeywords =
     [
@@ -34,6 +40,7 @@ public sealed class LaunchpadLayoutManager
         public List<string> HiddenAppNames { get; set; } = [];
         public List<string> ForceShownAppIds { get; set; } = [];
         public List<string> LockedAppIds { get; set; } = [];
+        public Dictionary<string, string> CustomIcons { get; set; } = [];
         public LaunchpadSortMode SortMode { get; set; } = LaunchpadSortMode.Custom;
     }
 
@@ -44,6 +51,7 @@ public sealed class LaunchpadLayoutManager
     private readonly HashSet<string> _hiddenNames = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _forceShownIds = new(StringComparer.OrdinalIgnoreCase);
     private readonly HashSet<string> _lockedIds = new(StringComparer.OrdinalIgnoreCase);
+    private readonly Dictionary<string, string> _customIcons = new(StringComparer.OrdinalIgnoreCase);
 
     public IReadOnlyList<LaunchpadEntry> Entries => _entries;
     public IReadOnlyList<InstalledAppEntry> ManualApps => _manualApps;
@@ -77,6 +85,27 @@ public sealed class LaunchpadLayoutManager
     }
 
     public bool IsLocked(string entryId) => !string.IsNullOrWhiteSpace(entryId) && _lockedIds.Contains(entryId);
+
+    public bool HasCustomIcon(string entryId)
+        => !string.IsNullOrWhiteSpace(entryId) && _customIcons.ContainsKey(entryId);
+
+    public void SetCustomIcon(string entryId, string imagePath)
+    {
+        if (string.IsNullOrWhiteSpace(entryId) || string.IsNullOrWhiteSpace(imagePath)) return;
+        _customIcons[entryId] = imagePath.Trim();
+    }
+
+    public bool ClearCustomIcon(string entryId)
+        => !string.IsNullOrWhiteSpace(entryId) && _customIcons.Remove(entryId);
+
+    public string? GetEffectiveIconPath(LaunchpadEntry entry)
+    {
+        if (_customIcons.TryGetValue(entry.Id, out string? custom) && !string.IsNullOrWhiteSpace(custom) && File.Exists(custom))
+        {
+            return custom;
+        }
+        return entry.IconPath ?? entry.LaunchTarget;
+    }
 
     public bool IsManualApp(string entryId)
         => !string.IsNullOrWhiteSpace(entryId) && _manualApps.Any(m => string.Equals(m.Id, entryId, StringComparison.OrdinalIgnoreCase));
@@ -504,6 +533,7 @@ public sealed class LaunchpadLayoutManager
                 HiddenAppNames = _hiddenNames.ToList(),
                 ForceShownAppIds = _forceShownIds.ToList(),
                 LockedAppIds = _lockedIds.ToList(),
+                CustomIcons = new Dictionary<string, string>(_customIcons, StringComparer.OrdinalIgnoreCase),
                 SortMode = SortMode
             };
             File.WriteAllText(filePath, JsonSerializer.Serialize(state, JsonOptions));
@@ -551,6 +581,17 @@ public sealed class LaunchpadLayoutManager
                 foreach (var id in state.ForceShownAppIds) _forceShownIds.Add(id);
                 _lockedIds.Clear();
                 foreach (var id in state.LockedAppIds) _lockedIds.Add(id);
+                _customIcons.Clear();
+                if (state.CustomIcons is not null)
+                {
+                    foreach (var (k, v) in state.CustomIcons)
+                    {
+                        if (!string.IsNullOrWhiteSpace(k) && !string.IsNullOrWhiteSpace(v))
+                        {
+                            _customIcons[k] = v;
+                        }
+                    }
+                }
                 SortMode = state.SortMode;
             }
         }

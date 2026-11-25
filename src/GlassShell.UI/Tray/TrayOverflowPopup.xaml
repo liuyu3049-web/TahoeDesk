@@ -41,6 +41,31 @@
 
             <Border Height="1" Background="{DynamicResource TrayDividerBrush}" Margin="0,8,0,8" />
 
+            <Button x:Name="ResyncTrayButton"
+                    Content="重新同步系统托盘图标"
+                    Height="26"
+                    Margin="0,0,0,6"
+                    Background="{DynamicResource TrayBtnBgBrush}"
+                    Foreground="{DynamicResource TrayFgBrush}"
+                    BorderThickness="0"
+                    FontSize="11.5"
+                    FontFamily="Microsoft YaHei UI, Segoe UI"
+                    Cursor="Hand"
+                    Click="OnResyncTrayClick">
+                <Button.Template>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Bd" Background="{TemplateBinding Background}" CornerRadius="7" Padding="10,0">
+                            <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Bd" Property="Opacity" Value="0.82" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Button.Template>
+            </Button>
+
             <Button x:Name="NativeTaskbarPeekButton"
                     Content="临时展开原生任务栏"
                     Height="28"

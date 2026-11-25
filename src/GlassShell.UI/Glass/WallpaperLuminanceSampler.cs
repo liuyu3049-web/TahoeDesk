@@ -37,10 +37,18 @@ public static class WallpaperLuminanceSampler
                 return _cachedDarkInk;
             }
 
-            // Decode directly downscaled to 160px width (~57 KB instead of ~33 MB for 4K wallpapers!)
+            // Read with FileShare.ReadWrite | FileShare.Delete so Wallpaper Engine never gets locked or crashed!
+            byte[] fileBytes;
+            using (var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+            {
+                fileBytes = new byte[fs.Length];
+                fs.ReadExactly(fileBytes);
+            }
+
+            using var ms = new MemoryStream(fileBytes, writable: false);
             var bmp = new BitmapImage();
             bmp.BeginInit();
-            bmp.UriSource = new Uri(path, UriKind.Absolute);
+            bmp.StreamSource = ms;
             bmp.DecodePixelWidth = 160;
             bmp.CreateOptions = BitmapCreateOptions.IgnoreColorProfile;
             bmp.CacheOption = BitmapCacheOption.OnLoad;

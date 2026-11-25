@@ -24,11 +24,12 @@ public partial class DockWindow : Window
 {
     private sealed class DockSlotVisual
     {
-        public required DockItemModel Model { get; init; }
+        public required DockItemModel Model { get; set; }
         public required Grid Container { get; init; }
         public required ScaleTransform IconScale { get; init; }
         public required TranslateTransform SlotTranslate { get; init; }
         public required Ellipse RunningDot { get; init; }
+        public required Ellipse FlashBadge { get; init; }
     }
 
     private const double IconGapDip = 8.0;
@@ -108,10 +109,13 @@ public partial class DockWindow : Window
 
     public event Action? LaunchpadRequested;
     public event Action<GlassSettings>? SettingsUpdated;
+    public event Action<string>? RemoveRecentAppRequested;
+    public event Action<string>? ActivateTrayAppRequested;
 
     public void ApplySettings(GlassSettings settings, bool isDarkMode)
     {
-        bool sizeChanged = _settings.DockIconSize != settings.DockIconSize;
+        bool rebuildNeeded = _settings.DockIconSize != settings.DockIconSize
+            || _settings.HarmonizeDockIcons != settings.HarmonizeDockIcons;
         _settings = settings;
         _isDarkMode = isDarkMode;
         CapsuleGlass.OpacityPreset = settings.OpacityPreset;
@@ -119,7 +123,7 @@ public partial class DockWindow : Window
         _contextMenu.ConfigureVisuals(_sampler, settings.OpacityPreset, isDarkMode);
         _folderStackPopup.ConfigureVisuals(_sampler, settings.OpacityPreset, isDarkMode);
         UpdateCapsuleHeight();
-        if (sizeChanged && _lastItems.Count > 0)
+        if (rebuildNeeded && _lastItems.Count > 0)
         {
             RebuildVisualSlots(_lastItems);
         }
@@ -142,16 +146,77 @@ public partial class DockWindow : Window
             {
                 return;
             }
+
+            // Fast in-place update when only running/flashing/window-list metadata changed (same slot order):
+            // ZERO visual teardown, ZERO DockWindow resize, ZERO flicker!
+            if (TryUpdateSlotsInPlace(items))
+            {
+                _lastItems = items;
+                return;
+            }
+
             _lastItems = items;
             RebuildVisualSlots(items);
         });
     }
 
+    private bool TryUpdateSlotsInPlace(IReadOnlyList<DockItemModel> items)
+    {
+        if (_slots.Count != items.Count || _slots.Count == 0) return false;
+        for (int i = 0; i < items.Count; i++)
+        {
+            var prev = _slots[i].Model;
+            var next = items[i];
+            if (!string.Equals(prev.Id, next.Id, StringComparison.OrdinalIgnoreCase)
+                || prev.Kind != next.Kind
+                || prev.Section != next.Section
+                || prev.IsRecycleBinEmpty != next.IsRecycleBinEmpty
+                || !string.Equals(prev.TargetPath, next.TargetPath, StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+        }
+
+        for (int i = 0; i < items.Count; i++)
+        {
+            var slot = _slots[i];
+            bool wasFlashing = slot.Model.IsFlashing;
+            var next = items[i];
+            slot.Model = next;
+
+            slot.RunningDot.Width = next.IsFlashing ? 5.5 : 4.5;
+            slot.RunningDot.Height = next.IsFlashing ? 5.5 : 4.5;
+            slot.RunningDot.Fill = new SolidColorBrush(next.IsFlashing
+                ? Color.FromRgb(0xFF, 0x45, 0x3A)
+                : Color.FromArgb(0xEB, 0xFF, 0xFF, 0xFF));
+            slot.RunningDot.Visibility = next.IsRunning || next.IsFlashing ? Visibility.Visible : Visibility.Hidden;
+            slot.FlashBadge.Visibility = next.IsFlashing ? Visibility.Visible : Visibility.Collapsed;
+
+            if (next.IsFlashing && !wasFlashing)
+            {
+                _bounceAnimator.TriggerBounce(next.Id, _clock.Elapsed.TotalSeconds, hops: 2);
+                _layoutDirty = true;
+            }
+        }
+
+        return true;
+    }
+
     private void UpdateCompactWindowBounds(double maxMagnifiedCapsuleWidth)
     {
-        // Keep DockWindow compact with generous 75-DIP side headroom so outermost icons' tooltips stay 100% centered
-        double targetW = Math.Min(_monitor.WidthDip, Math.Max(380, Math.Ceiling(maxMagnifiedCapsuleWidth + 150)));
-        if (Math.Abs(Width - targetW) > 8.0)
+        // Hysteresis sizing: keep generous headroom so opening/closing 1-2 apps NEVER resizes DockWindow or recreates D3D11 textures!
+        double minNeededW = Math.Min(_monitor.WidthDip, Math.Max(480, Math.Ceiling(maxMagnifiedCapsuleWidth + 160)));
+        double targetW = Width;
+        if (Width < minNeededW)
+        {
+            targetW = Math.Min(_monitor.WidthDip, Math.Ceiling(minNeededW + 140));
+        }
+        else if (Width > minNeededW + 260)
+        {
+            targetW = Math.Min(_monitor.WidthDip, Math.Ceiling(minNeededW + 100));
+        }
+
+        if (Math.Abs(Width - targetW) > 1.0)
         {
             Width = targetW;
         }
@@ -225,21 +290,20 @@ public partial class DockWindow : Window
         var iconGrid = new Grid();
         iconGrid.Children.Add(iconContent);
 
-        if (model.IsFlashing)
+        var flashBadge = new Ellipse
         {
-            iconGrid.Children.Add(new Ellipse
-            {
-                Width = 11,
-                Height = 11,
-                Fill = new SolidColorBrush(Color.FromRgb(0xFF, 0x3B, 0x30)),
-                Stroke = new SolidColorBrush(Color.FromArgb(0xEE, 0xFF, 0xFF, 0xFF)),
-                StrokeThickness = 1.4,
-                HorizontalAlignment = HorizontalAlignment.Right,
-                VerticalAlignment = VerticalAlignment.Top,
-                Margin = new Thickness(0, 1, 1, 0),
-                IsHitTestVisible = false
-            });
-        }
+            Width = 11,
+            Height = 11,
+            Fill = new SolidColorBrush(Color.FromRgb(0xFF, 0x3B, 0x30)),
+            Stroke = new SolidColorBrush(Color.FromArgb(0xEE, 0xFF, 0xFF, 0xFF)),
+            StrokeThickness = 1.4,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Top,
+            Margin = new Thickness(0, 1, 1, 0),
+            IsHitTestVisible = false,
+            Visibility = model.IsFlashing ? Visibility.Visible : Visibility.Collapsed
+        };
+        iconGrid.Children.Add(flashBadge);
 
         var iconFrame = new Border
         {
@@ -277,20 +341,31 @@ public partial class DockWindow : Window
         container.Children.Add(iconFrame);
         container.Children.Add(dot);
 
+        var slot = new DockSlotVisual
+        {
+            Model = model,
+            Container = container,
+            IconScale = iconScale,
+            SlotTranslate = slotTranslate,
+            RunningDot = dot,
+            FlashBadge = flashBadge
+        };
+
         container.MouseLeftButtonDown += (_, e) =>
         {
             _dragStartPoint = e.GetPosition(this);
-            _draggingItem = model;
+            _draggingItem = slot.Model;
         };
 
         container.MouseMove += (_, e) =>
         {
-            if (e.LeftButton == MouseButtonState.Pressed && _draggingItem?.Id == model.Id && model.IsPinned && model.Kind == DockItemKind.Application)
+            var cur = slot.Model;
+            if (e.LeftButton == MouseButtonState.Pressed && _draggingItem?.Id == cur.Id && cur.IsPinned && cur.Kind == DockItemKind.Application)
             {
                 var pos = e.GetPosition(this);
                 if (Math.Abs(pos.Y - _dragStartPoint.Y) > 78 && pos.Y < _dragStartPoint.Y)
                 {
-                    UnpinApp(model.TargetPath);
+                    UnpinApp(cur.TargetPath);
                     _draggingItem = null;
                 }
             }
@@ -300,43 +375,38 @@ public partial class DockWindow : Window
         {
             _draggingItem = null;
             e.Handled = true;
-            HandleItemClick(model, container);
+            HandleItemClick(slot.Model, container);
         };
 
         container.MouseRightButtonUp += (_, e) =>
         {
             e.Handled = true;
-            if (model.Kind == DockItemKind.Launchpad)
+            var cur = slot.Model;
+            if (cur.Kind == DockItemKind.Launchpad)
             {
                 HideInlineTooltip();
                 OpenNativeWindowsStartMenu();
                 return;
             }
-            ShowContextMenu(container, model);
+            ShowContextMenu(container, cur);
         };
 
         container.Drop += (_, e) =>
         {
-            if (model.Kind == DockItemKind.Application && !string.IsNullOrWhiteSpace(model.TargetPath)
+            var cur = slot.Model;
+            if (cur.Kind == DockItemKind.Application && !string.IsNullOrWhiteSpace(cur.TargetPath)
                 && e.Data.GetDataPresent(DataFormats.FileDrop))
             {
                 var files = (string[])e.Data.GetData(DataFormats.FileDrop);
                 if (files is { Length: > 0 })
                 {
                     e.Handled = true;
-                    LaunchAppWithFiles(model.TargetPath, files);
+                    LaunchAppWithFiles(cur.TargetPath, files);
                 }
             }
         };
 
-        return new DockSlotVisual
-        {
-            Model = model,
-            Container = container,
-            IconScale = iconScale,
-            SlotTranslate = slotTranslate,
-            RunningDot = dot
-        };
+        return slot;
     }
 
     private UIElement BuildIconVisual(DockItemModel model)
@@ -348,16 +418,38 @@ public partial class DockWindow : Window
 
         if (!string.IsNullOrWhiteSpace(model.TargetPath))
         {
-            var bmp = GetOrExtractIconBitmap(model.TargetPath, 128);
-            if (bmp is not null)
+            var iconEntry = SharedIconCache.GetOrExtractWithShape(model.TargetPath, 128);
+            if (iconEntry is not null)
             {
                 var img = new Image
                 {
-                    Source = bmp,
+                    Source = iconEntry.Bitmap,
                     Stretch = Stretch.Uniform,
-                    Margin = new Thickness(3)
+                    Margin = new Thickness(_settings.HarmonizeDockIcons && iconEntry.HasTransparentCorners ? 6 : 3)
                 };
                 RenderOptions.SetBitmapScalingMode(img, BitmapScalingMode.Linear);
+
+                if (_settings.HarmonizeDockIcons && iconEntry.HasTransparentCorners)
+                {
+                    var tileBg = new LinearGradientBrush(
+                        _isDarkMode ? Color.FromArgb(0xDC, 0x3C, 0x42, 0x52) : Color.FromArgb(0xEC, 0xFF, 0xFF, 0xFF),
+                        _isDarkMode ? Color.FromArgb(0xD4, 0x24, 0x28, 0x34) : Color.FromArgb(0xE0, 0xE6, 0xEC, 0xF5),
+                        90);
+                    var tileBorder = new SolidColorBrush(_isDarkMode ? Color.FromArgb(0x55, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x40, 0x00, 0x00, 0x00));
+                    tileBg.Freeze();
+                    tileBorder.Freeze();
+
+                    return new Border
+                    {
+                        Margin = new Thickness(2.5),
+                        CornerRadius = new CornerRadius(Math.Max(10, _settings.DockIconSize * 0.225)),
+                        Background = tileBg,
+                        BorderBrush = tileBorder,
+                        BorderThickness = new Thickness(0.8),
+                        Child = img
+                    };
+                }
+
                 return img;
             }
         }
@@ -368,9 +460,6 @@ public partial class DockWindow : Window
             Margin = new Thickness(5)
         };
     }
-
-    private static BitmapSource? GetOrExtractIconBitmap(string path, int size)
-        => SharedIconCache.GetOrExtract(path, size);
 
     private UIElement BuildMinimizedWindowVisual(DockItemModel model)
     {
@@ -767,8 +856,19 @@ public partial class DockWindow : Window
                 if (model.OpenWindowHandles.Count > 0) ActivateOrAnimateRestore(model.OpenWindowHandles[0], anchor);
                 return;
             case DockItemKind.Application:
-                if (model.OpenWindowHandles.Count > 0) ActivateOrAnimateRestore(model.OpenWindowHandles[0], anchor);
-                else if (!string.IsNullOrWhiteSpace(model.TargetPath)) StartProcess(model.TargetPath, null);
+                if (model.OpenWindowHandles.Count > 0)
+                {
+                    ActivateOrAnimateRestore(model.OpenWindowHandles[0], anchor);
+                }
+                else if (model.IsRunning && !string.IsNullOrWhiteSpace(model.TargetPath) && ActivateTrayAppRequested is not null)
+                {
+                    // App is running in system tray (e.g. WeChat closed with X): restore existing tray instance instead of spawning a new window!
+                    ActivateTrayAppRequested.Invoke(model.TargetPath);
+                }
+                else if (!string.IsNullOrWhiteSpace(model.TargetPath))
+                {
+                    StartProcess(model.TargetPath, null);
+                }
                 return;
         }
     }
@@ -807,6 +907,10 @@ public partial class DockWindow : Window
                 entries.Add(model.IsPinned
                     ? new("从程序坞中移除", OnClick: () => UnpinApp(model.TargetPath))
                     : new("在程序坞中保留", OnClick: () => PinApp(model.TargetPath)));
+                if (!model.IsPinned && !model.IsRunning)
+                {
+                    entries.Add(new("从最近使用中移除", OnClick: () => RemoveRecentAppRequested?.Invoke(model.TargetPath)));
+                }
                 entries.Add(new("在资源管理器中显示", OnClick: () => StartProcess("explorer.exe", $"/select,\"{model.TargetPath}\"")));
             }
 

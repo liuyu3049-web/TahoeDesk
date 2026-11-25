@@ -89,6 +89,15 @@ public sealed class GlobalHotkeyManager : IDisposable
         }
     }
 
+    public void UnregisterAll()
+    {
+        foreach (var (id, entry) in _registrations)
+        {
+            UnregisterHotKey(entry.Hwnd, id);
+        }
+        _registrations.Clear();
+    }
+
     public bool ProcessWndProc(int msg, nint wParam)
     {
         if (msg != WM_HOTKEY) return false;

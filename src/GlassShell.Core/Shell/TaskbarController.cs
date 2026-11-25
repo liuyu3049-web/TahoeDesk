@@ -44,6 +44,13 @@ public sealed class TaskbarController
                 _native.RegisterTopAppBar(_appBarHwnd, heightPx, primaryMonitor.Bounds);
             }
 
+            // Re-hide native taskbars AFTER AppBar registration because SHAppBarMessage(ABM_SETPOS)
+            // can cause Windows Explorer to briefly re-show primary/secondary taskbars on multi-monitor setups!
+            if (_taskbarHwnd != 0)
+            {
+                _native.SetWindowVisible(_taskbarHwnd, false);
+            }
+
             IsAcquired = true;
             IsTrayPeekActive = false;
             IsFullscreenYieldActive = false;

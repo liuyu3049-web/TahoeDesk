@@ -11,6 +11,9 @@ public sealed class Win32TaskbarNative : ITaskbarNative
     private const uint ABM_REMOVE = 0x00000001;
     private const uint ABM_QUERYPOS = 0x00000002;
     private const uint ABM_SETPOS = 0x00000003;
+    private const uint ABM_GETSTATE = 0x00000004;
+    private const uint ABM_SETSTATE = 0x0000000A;
+    public const int ABS_AUTOHIDE = 0x0000001;
     private const uint ABE_TOP = 1;
     private const int QUNS_RUNNING_D3D_FULL_SCREEN = 3;
 
@@ -35,21 +38,105 @@ public sealed class Win32TaskbarNative : ITaskbarNative
         return 0;
     }
 
+    /// <summary>
+    /// Reads Windows taskbar state flags (e.g. ABS_AUTOHIDE) directly from Explorer's Shell_TrayWnd.
+    /// </summary>
+    public static int GetTaskbarAutoHideState()
+    {
+        try
+        {
+            var data = new APPBARDATA
+            {
+                cbSize = (uint)Marshal.SizeOf<APPBARDATA>(),
+                hWnd = FindExplorerPrimaryTaskbar()
+            };
+            return unchecked((int)SHAppBarMessage(ABM_GETSTATE, ref data));
+        }
+        catch
+        {
+            return 0;
+        }
+    }
+
+    /// <summary>
+    /// Sets Windows taskbar auto-hide state via documented SHAppBarMessage(ABM_SETSTATE).
+    /// Enabling ABS_AUTOHIDE releases the reserved bottom taskbar strip on ALL monitors so maximized windows truly fill the screen.
+    /// </summary>
+    public static void SetTaskbarAutoHideState(int state)
+    {
+        try
+        {
+            var data = new APPBARDATA
+            {
+                cbSize = (uint)Marshal.SizeOf<APPBARDATA>(),
+                hWnd = FindExplorerPrimaryTaskbar(),
+                lParam = state
+            };
+            SHAppBarMessage(ABM_SETSTATE, ref data);
+        }
+        catch { }
+    }
+
+    public bool IsAnyNativeTaskbarVisible()
+    {
+        uint selfPid = (uint)Environment.ProcessId;
+
+        nint primary = FindWindowExW(0, 0, "Shell_TrayWnd", null);
+        while (primary != 0)
+        {
+            GetWindowThreadProcessId(primary, out uint pid);
+            if (pid != 0 && pid != selfPid && IsWindowVisible(primary))
+            {
+                return true;
+            }
+            primary = FindWindowExW(0, primary, "Shell_TrayWnd", null);
+        }
+
+        nint sec = FindWindowExW(0, 0, "Shell_SecondaryTrayWnd", null);
+        while (sec != 0)
+        {
+            if (IsWindowVisible(sec)) return true;
+            sec = FindWindowExW(0, sec, "Shell_SecondaryTrayWnd", null);
+        }
+
+        return false;
+    }
+
     public bool SetWindowVisible(nint hwnd, bool visible)
     {
-        if (hwnd == 0) return false;
         int cmd = visible ? SW_SHOW : SW_HIDE;
-        ShowWindow(hwnd, cmd);
+        uint selfPid = (uint)Environment.ProcessId;
+        bool any = false;
 
-        // Also hide/restore all secondary monitor taskbars (built-in / multi-display)
+        // Hide/show EVERY Explorer Shell_TrayWnd (skipping our own proxy)
+        nint primary = FindWindowExW(0, 0, "Shell_TrayWnd", null);
+        while (primary != 0)
+        {
+            GetWindowThreadProcessId(primary, out uint pid);
+            if (pid != 0 && pid != selfPid)
+            {
+                ShowWindow(primary, cmd);
+                any = true;
+            }
+            primary = FindWindowExW(0, primary, "Shell_TrayWnd", null);
+        }
+
+        if (!any && hwnd != 0)
+        {
+            ShowWindow(hwnd, cmd);
+            any = true;
+        }
+
+        // Also hide/restore ALL secondary monitor taskbars (laptop built-in + external displays)
         nint sec = FindWindowExW(0, 0, "Shell_SecondaryTrayWnd", null);
         while (sec != 0)
         {
             ShowWindow(sec, cmd);
+            any = true;
             sec = FindWindowExW(0, sec, "Shell_SecondaryTrayWnd", null);
         }
 
-        return true;
+        return any;
     }
 
     public bool RegisterTopAppBar(nint appBarHwnd, int heightPx, ScreenRect monitorBounds)
@@ -107,8 +194,13 @@ public sealed class Win32TaskbarNative : ITaskbarNative
             && state == QUNS_RUNNING_D3D_FULL_SCREEN;
     }
 
-    public static void RestorePrimaryTaskbarNow()
+    public static void RestorePrimaryTaskbarNow(int? restoreState = null)
     {
+        if (restoreState.HasValue)
+        {
+            SetTaskbarAutoHideState(restoreState.Value);
+        }
+
         var hwnd = FindExplorerPrimaryTaskbar();
         if (hwnd != 0)
         {
@@ -144,10 +236,11 @@ public sealed class Win32TaskbarNative : ITaskbarNative
     }
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
-    private static extern nint FindWindowW(string lpClassName, string? lpWindowName);
-
-    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern nint FindWindowExW(nint hwndParent, nint hwndChildAfter, string lpszClass, string? lpszWindow);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool IsWindowVisible(nint hWnd);
 
     [DllImport("user32.dll")]
     private static extern uint GetWindowThreadProcessId(nint hWnd, out uint lpdwProcessId);
