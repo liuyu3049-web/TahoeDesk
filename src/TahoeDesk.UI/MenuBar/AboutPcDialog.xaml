@@ -18,13 +18,11 @@
                                   IsOverlayCard="True"
                                   IsDarkMode="True" />
         <StackPanel Margin="28,24,28,24" HorizontalAlignment="Center">
-            <Border Width="64" Height="64" CornerRadius="16" Background="#280A84FF" Margin="0,6,0,14">
-                <Path Data="M0,0 H9 V9 H0 Z M11,0 H20 V9 H11 Z M0,11 H9 V20 H0 Z M11,11 H20 V20 H11 Z"
-                      Fill="#F5FFFFFF"
-                      Stretch="Uniform"
-                      Width="30"
-                      Height="30" />
-            </Border>
+            <Image Source="pack://application:,,,/Assets/TahoeDesk.png"
+                   Width="72"
+                   Height="72"
+                   RenderOptions.BitmapScalingMode="HighQuality"
+                   Margin="0,2,0,12" />
             <TextBlock x:Name="MachineNameText" FontSize="20" FontWeight="SemiBold" Foreground="#F5FFFFFF" HorizontalAlignment="Center" />
             <TextBlock Text="TahoeDesk 液态玻璃桌面" FontSize="12" Foreground="#99FFFFFF" HorizontalAlignment="Center" Margin="0,2,0,16" />
 

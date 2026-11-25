@@ -10,6 +10,7 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <LangVersion>12</LangVersion>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\TahoeDesk.ico</ApplicationIcon>
     <Product>TahoeDesk</Product>
     <AssemblyTitle>TahoeDesk</AssemblyTitle>
     <Description>TahoeDesk — macOS Tahoe Liquid Glass Desktop Shell for Windows 11</Description>
@@ -39,6 +40,7 @@
     <PackageReference Include="Vortice.D3DCompiler" Version="3.6.2" />
   </ItemGroup>
   <ItemGroup>
+    <Resource Include="Assets\TahoeDesk.png" />
     <Content Include="Glass\Shaders\*.hlsl" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 </Project>

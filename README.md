@@ -1,6 +1,15 @@
-# TahoeDesk
+<p align="center">
+  <img src="assets/logo.png" width="128" height="128" alt="TahoeDesk Logo" />
+</p>
 
-**TahoeDesk** 是一款面向 Windows 11 的轻量级 **macOS Tahoe (26+) 液态玻璃（Liquid Glass）** 桌面壳，采用纯 C# `.NET 8` + WPF + DXGI / Direct3D 11 HLSL 着色器实现。
+<h1 align="center">TahoeDesk</h1>
+
+<p align="center">
+  面向 Windows 11 的轻量级 <b>macOS Tahoe (26+) 液态玻璃（Liquid Glass）</b> 桌面壳<br/>
+  纯 C# <code>.NET 8</code> + WPF + DXGI / Direct3D 11 HLSL 着色器 · 零 DLL 注入 · 看门狗自愈保护
+</p>
+
+---
 
 - **零 DLL 注入**：不注入 `explorer.exe` 或任何第三方进程，不修改系统文件，无需管理员权限。
 - **看门狗自愈保护**：独立 `TahoeDesk.Watchdog.exe` 守护进程，异常崩溃或强杀时毫秒级自动恢复 Windows 原生任务栏与自动隐藏状态。
