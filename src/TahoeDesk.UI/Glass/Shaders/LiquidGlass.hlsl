@@ -38,24 +38,29 @@ VSOut VSMain(uint id : SV_VertexID)
 static const float BlurOffsets[5] = { 0.0, 1.384615, 3.230769, 5.153846, 7.0 };
 static const float BlurWeights[5] = { 0.204164, 0.304005, 0.093913, 0.033800, 0.011000 };
 
-// Pass 1 (Half-Resolution): Horizontal Gaussian blur from desktop capture texture
+// Pass 1 (Half-Resolution): Horizontal Gaussian blur from desktop/wallpaper texture
 float4 PSBlurH(VSOut inp) : SV_Target
 {
     float2 desktopUV = SurfaceRectNorm.xy + inp.UV * SurfaceRectNorm.zw;
-    if (SampleMode > 0.5 && SampleMode < 1.5)
-    {
-        // Reflect live desktop strip directly ABOVE the Dock capsule so Dock never samples itself
-        // (eliminates glass feedback loop while staying 100% visible in screenshots & remote desktop!)
-        float gapY = 2.0 / max(DesktopSize.y, 1.0);
-        desktopUV.y = SurfaceRectNorm.y - gapY - inp.UV.y * SurfaceRectNorm.w;
-    }
-    else if (SampleMode >= 1.5)
-    {
-        // Reflect live desktop strip directly BELOW the top MenuBar so MenuBar never samples itself
-        float gapY = 2.0 / max(DesktopSize.y, 1.0);
-        desktopUV.y = (SurfaceRectNorm.y + SurfaceRectNorm.w) + gapY + (1.0 - inp.UV.y) * SurfaceRectNorm.w;
-    }
     float scaleX = (BlurRadius / 7.0) / max(DesktopSize.x, 1.0);
+
+    // SampleMode == 1 (Live Wallpaper Engine flank blend): sample clean live DXGI wallpaper flanks
+    // to the LEFT and RIGHT of the Dock on the EXACT same Y-band — never above the Dock,
+    // so tooltips, magnified icons, and windows above the Dock NEVER smudge into the Dock glass!
+    if (SampleMode > 0.5)
+    {
+        float marginX = 6.0 / max(DesktopSize.x, 1.0);
+        float leftX = saturate(SurfaceRectNorm.x - marginX);
+        float rightX = saturate(SurfaceRectNorm.x + SurfaceRectNorm.z + marginX);
+        float y = saturate(desktopUV.y);
+        float3 colL = SourceTex.Sample(LinearClamp, float2(leftX, y)).rgb;
+        float3 colR = SourceTex.Sample(LinearClamp, float2(rightX, y)).rgb;
+        float3 colL2 = SourceTex.Sample(LinearClamp, float2(saturate(leftX - 0.03), y)).rgb;
+        float3 colR2 = SourceTex.Sample(LinearClamp, float2(saturate(rightX + 0.03), y)).rgb;
+        float t = smoothstep(0.0, 1.0, inp.UV.x);
+        float3 blended = lerp(lerp(colL2, colL, 0.65), lerp(colR, colR2, 0.35), t);
+        return float4(blended, 1.0);
+    }
 
     float3 sum = SourceTex.Sample(LinearClamp, saturate(desktopUV)).rgb * BlurWeights[0];
     float weightSum = BlurWeights[0];

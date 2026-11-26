@@ -11,8 +11,7 @@ namespace TahoeDesk.UI.Glass;
 public enum GlassBackdropSampleMode
 {
     Direct = 0,
-    ReflectAbove = 1,
-    ReflectBelow = 2
+    DockBackdrop = 1
 }
 
 public sealed class LiquidGlassSurface : FrameworkElement, IDisposable

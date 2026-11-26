@@ -99,6 +99,7 @@ public partial class App : Application
         SystemEvents.DisplaySettingsChanged += OnDisplaySettingsChanged;
         SystemEvents.SessionSwitch += OnSessionSwitch;
         SystemEvents.PowerModeChanged += OnPowerModeChanged;
+        SystemEvents.UserPreferenceChanged += OnAppUserPreferenceChanged;
 
         // Enable taskbar auto-hide BEFORE acquiring work area so Windows releases the bottom ~48px reserved strip
         // on EVERY monitor (primary + external), allowing maximized windows to truly fill the full screen!
@@ -304,6 +305,14 @@ public partial class App : Application
         }
     }
 
+    private void OnAppUserPreferenceChanged(object? sender, UserPreferenceChangedEventArgs e)
+    {
+        if (e.Category is UserPreferenceCategory.Desktop or UserPreferenceCategory.General)
+        {
+            _backdropSampler?.InvalidateWallpaper();
+        }
+    }
+
     private void ScheduleDisplayRebuild()
     {
         if (_cleanedUp) return;
@@ -489,8 +498,8 @@ public partial class App : Application
             && Math.Abs(s.Monitor.Bounds.Top - targetMon.Bounds.Top) <= 4) ?? _shells[0];
 
         int topBarPx = (int)Math.Round(shell.MenuBar.Height * targetMon.DpiScale);
-        // Exact top edge of the resting Dock glass capsule (DockIconSize + 18 capsule + 10 + 6 bottom margins) + 1px hairline
-        int dockReservePx = (int)Math.Round((_settings.DockIconSize + 34) * targetMon.DpiScale) + 1;
+        // Exact top edge of the resting Dock glass capsule (DockIconSize + 18 capsule + 6 bottom margin) -> sits flush like macOS!
+        int dockReservePx = (int)Math.Round((_settings.DockIconSize + 24) * targetMon.DpiScale);
         _dockSafeZoomManager.ToggleZoom(hwnd, targetMon, topBarPx, dockReservePx);
     }
 
@@ -1004,6 +1013,7 @@ public partial class App : Application
         try { SystemEvents.DisplaySettingsChanged -= OnDisplaySettingsChanged; } catch { }
         try { SystemEvents.SessionSwitch -= OnSessionSwitch; } catch { }
         try { SystemEvents.PowerModeChanged -= OnPowerModeChanged; } catch { }
+        try { SystemEvents.UserPreferenceChanged -= OnAppUserPreferenceChanged; } catch { }
         try { _displayRebuildDebounceTimer?.Stop(); } catch { }
         try { _periodicRefreshTimer?.Stop(); } catch { }
         try { _foregroundReconcileTimer?.Stop(); } catch { }

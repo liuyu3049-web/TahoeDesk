@@ -80,7 +80,18 @@ public sealed class LiquidGlassRenderer : IDisposable
         frameUpdated = false;
         if (_disposed || surfaceRectPx.Width <= 4 || surfaceRectPx.Height <= 4) return false;
 
-        if (!_sampler.TryGetOutputForRect(surfaceRectPx, out var srv, out var outputBounds, out long frameVersion, preferCachedFrame)
+        ID3D11ShaderResourceView? srv = null;
+        ScreenRect outputBounds = default;
+        long frameVersion = 0;
+        int effectiveSampleMode = sampleMode;
+
+        // DockBackdrop (sampleMode == 1): prefer exact behind-Dock Windows wallpaper texture (sampleMode=0 -> pixel-accurate macOS glass,
+        // zero tooltip/window smudge!). If Wallpaper Engine is running, fall back to live DXGI same-Y flank blend (sampleMode=1).
+        if (sampleMode == 1 && _sampler.TryGetWallpaperBackdropForRect(surfaceRectPx, out srv, out outputBounds, out frameVersion) && srv is not null)
+        {
+            effectiveSampleMode = 0;
+        }
+        else if (!_sampler.TryGetOutputForRect(surfaceRectPx, out srv, out outputBounds, out frameVersion, preferCachedFrame)
             || srv is null || outputBounds.Width <= 0 || outputBounds.Height <= 0)
         {
             return false;
@@ -93,7 +104,7 @@ public sealed class LiquidGlassRenderer : IDisposable
             && glassParams == _lastRenderedParams
             && Math.Abs(shadowPaddingPx - _lastShadowPad) < 0.1f
             && Math.Abs(activeBoxWidthPx - _lastActiveBoxWidthPx) < 0.35f
-            && sampleMode == _lastSampleMode)
+            && effectiveSampleMode == _lastSampleMode)
         {
             return true;
         }
@@ -145,7 +156,7 @@ public sealed class LiquidGlassRenderer : IDisposable
                 SpecularStrength = glassParams.SpecularStrength,
                 IsDarkMode = glassParams.IsDarkMode ? 1.0f : 0.0f,
                 ActiveBoxWidthPx = activeBoxWidthPx,
-                SampleMode = sampleMode
+                SampleMode = effectiveSampleMode
             };
 
             ctx.UpdateSubresource(in cb, pipeline.ConstantBuffer);
@@ -189,7 +200,7 @@ public sealed class LiquidGlassRenderer : IDisposable
             _lastRenderedParams = glassParams;
             _lastShadowPad = shadowPaddingPx;
             _lastActiveBoxWidthPx = activeBoxWidthPx;
-            _lastSampleMode = sampleMode;
+            _lastSampleMode = effectiveSampleMode;
             frameUpdated = true;
             return SharedD3D9SurfacePtr != 0;
         }

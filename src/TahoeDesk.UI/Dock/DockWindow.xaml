@@ -14,7 +14,7 @@
         ShowActivated="False"
         AllowDrop="True"
         Topmost="True">
-    <Grid x:Name="RootContainer" VerticalAlignment="Bottom" Margin="0,0,0,6">
+    <Grid x:Name="RootContainer" VerticalAlignment="Bottom" Margin="0">
         <Grid.RenderTransform>
             <TranslateTransform x:Name="SlideTransform" Y="0" />
         </Grid.RenderTransform>
@@ -24,13 +24,13 @@
               HorizontalAlignment="Stretch"
               VerticalAlignment="Bottom"
               Height="70"
-              Margin="0,0,0,10"
+              Margin="0,0,0,6"
               IsHitTestVisible="True">
             <glass:LiquidGlassSurface x:Name="CapsuleGlass"
                                       HorizontalAlignment="Stretch"
                                       VerticalAlignment="Stretch"
                                       IsClippedBackdrop="True"
-                                      BackdropSampleMode="ReflectAbove"
+                                      BackdropSampleMode="DockBackdrop"
                                       IsHitTestVisible="False"
                                       IsDarkMode="True">
                 <glass:LiquidGlassSurface.Clip>
@@ -49,7 +49,7 @@
                 HorizontalAlignment="Stretch"
                 VerticalAlignment="Bottom"
                 Height="150"
-                Margin="0,0,0,10"
+                Margin="0,0,0,6"
                 Background="{x:Null}" />
 
         <!-- Fixed-width 320-DIP centering wrapper guarantees 100.0% dead-center tooltip alignment over EVERY icon! -->
@@ -57,7 +57,7 @@
                 HorizontalAlignment="Stretch"
                 VerticalAlignment="Bottom"
                 Height="150"
-                Margin="0,0,0,10"
+                Margin="0,0,0,6"
                 IsHitTestVisible="False">
             <Grid x:Name="InlineTooltipAnchor"
                   Width="320"

@@ -1,7 +1,11 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using System.Runtime.InteropServices;
+using System.Text;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using TahoeDesk.Core.Glass;
 using TahoeDesk.Core.Shell;
 using SharpGen.Runtime;
@@ -40,11 +44,22 @@ public sealed class DxgiBackdropSampler : IBackdropSampler
         public required IDXGIOutputDuplication Duplication { get; init; }
         public ID3D11Texture2D? Texture { get; set; }
         public ID3D11ShaderResourceView? Srv { get; set; }
+        public ID3D11Texture2D? WallpaperTexture { get; set; }
+        public ID3D11ShaderResourceView? WallpaperSrv { get; set; }
         public long FrameVersion { get; set; }
+
+        public void DisposeWallpaper()
+        {
+            WallpaperSrv?.Dispose();
+            WallpaperTexture?.Dispose();
+            WallpaperSrv = null;
+            WallpaperTexture = null;
+        }
 
         public void Dispose()
         {
             try { Duplication.Dispose(); } catch { }
+            DisposeWallpaper();
             Srv?.Dispose();
             Texture?.Dispose();
             Srv = null;
@@ -52,6 +67,7 @@ public sealed class DxgiBackdropSampler : IBackdropSampler
         }
     }
 
+    private const uint SPI_GETDESKWALLPAPER = 0x0073;
     private readonly DxgiSamplerStateMachine _stateMachine = new();
     private readonly object _gate = new();
     private readonly List<OutputCaptureSlot> _outputs = [];
@@ -62,6 +78,10 @@ public sealed class DxgiBackdropSampler : IBackdropSampler
     private IDirect3DDevice9Ex? _d3d9Device;
     private SharedGlassPipeline? _sharedPipeline;
     private bool _pipelineInitAttempted;
+    private long _wallpaperVersion = 1;
+    private bool _wallpaperDirty = true;
+    private long _lastWallpaperEngineCheckMs = -10_000;
+    private bool _isWallpaperEngineRunning;
     private bool _disposed;
 
     internal SharedGlassPipeline? GetOrCreateSharedGlassPipeline(uint constantBufferByteWidth)
@@ -137,6 +157,8 @@ public sealed class DxgiBackdropSampler : IBackdropSampler
         {
             if (_disposed) return;
             DisposeOutputsOnly();
+            _wallpaperDirty = true;
+            _wallpaperVersion++;
             if (_device is null || _context is null)
             {
                 TryInitializeDeviceAndDuplications();
@@ -144,6 +166,198 @@ public sealed class DxgiBackdropSampler : IBackdropSampler
             }
             TryAcquireAllOutputs();
         }
+    }
+
+    public void InvalidateWallpaper()
+    {
+        lock (_gate)
+        {
+            if (_disposed) return;
+            foreach (var o in _outputs) o.DisposeWallpaper();
+            _wallpaperDirty = true;
+            _wallpaperVersion++;
+        }
+    }
+
+    /// <summary>
+    /// Returns the exact behind-the-Dock desktop wallpaper texture for standard Windows wallpapers
+    /// (zero tooltip/icon/window smudge, pixel-accurate macOS Tahoe glass!). Returns false when
+    /// Wallpaper Engine is running so the Dock switches to live DXGI same-Y flank sampling.
+    /// </summary>
+    internal bool TryGetWallpaperBackdropForRect(
+        ScreenRect surfaceRectPx,
+        out ID3D11ShaderResourceView? srv,
+        out ScreenRect outputBounds,
+        out long frameVersion)
+    {
+        srv = null;
+        outputBounds = default;
+        frameVersion = 0;
+
+        lock (_gate)
+        {
+            if (_disposed || _device is null || _outputs.Count == 0) return false;
+            if (IsWallpaperEngineActive()) return false;
+
+            int cx = (surfaceRectPx.Left + surfaceRectPx.Right) / 2;
+            int cy = (surfaceRectPx.Top + surfaceRectPx.Bottom) / 2;
+            OutputCaptureSlot? slot = null;
+            foreach (var candidate in _outputs)
+            {
+                var b = candidate.DesktopBounds;
+                if (cx >= b.Left && cx < b.Right && cy >= b.Top && cy < b.Bottom)
+                {
+                    slot = candidate;
+                    break;
+                }
+            }
+            slot ??= _outputs[0];
+
+            if (_wallpaperDirty || slot.WallpaperSrv is null)
+            {
+                TryBuildWallpaperTextureForSlot(slot);
+                _wallpaperDirty = false;
+            }
+
+            if (slot.WallpaperSrv is not null)
+            {
+                srv = slot.WallpaperSrv;
+                outputBounds = slot.DesktopBounds;
+                frameVersion = -1000L - _wallpaperVersion; // Distinct negative namespace so switching to/from DXGI always redraws!
+                return true;
+            }
+
+            return false;
+        }
+    }
+
+    private bool IsWallpaperEngineActive()
+    {
+        long now = Environment.TickCount64;
+        if (now - _lastWallpaperEngineCheckMs < 4000)
+        {
+            return _isWallpaperEngineRunning;
+        }
+        _lastWallpaperEngineCheckMs = now;
+        try
+        {
+            var p64 = Process.GetProcessesByName("wallpaper64");
+            bool running = p64.Length > 0;
+            foreach (var p in p64) p.Dispose();
+            if (!running)
+            {
+                var p32 = Process.GetProcessesByName("wallpaper32");
+                running = p32.Length > 0;
+                foreach (var p in p32) p.Dispose();
+            }
+            _isWallpaperEngineRunning = running;
+        }
+        catch
+        {
+            _isWallpaperEngineRunning = false;
+        }
+        return _isWallpaperEngineRunning;
+    }
+
+    private void TryBuildWallpaperTextureForSlot(OutputCaptureSlot slot)
+    {
+        if (_device is null) return;
+        slot.DisposeWallpaper();
+
+        try
+        {
+            string? path = ResolveWallpaperFilePath();
+            if (string.IsNullOrWhiteSpace(path) || !File.Exists(path)) return;
+
+            byte[] fileBytes;
+            using (var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete))
+            {
+                if (fs.Length <= 0 || fs.Length > 64 * 1024 * 1024) return;
+                fileBytes = new byte[fs.Length];
+                fs.ReadExactly(fileBytes);
+            }
+
+            using var ms = new MemoryStream(fileBytes, writable: false);
+            var bmp = new BitmapImage();
+            bmp.BeginInit();
+            bmp.StreamSource = ms;
+            bmp.DecodePixelWidth = 1024;
+            bmp.CreateOptions = BitmapCreateOptions.IgnoreColorProfile;
+            bmp.CacheOption = BitmapCacheOption.OnLoad;
+            bmp.EndInit();
+            bmp.Freeze();
+
+            var bgra = new FormatConvertedBitmap(bmp, PixelFormats.Bgra32, null, 0);
+            int srcW = bgra.PixelWidth;
+            int srcH = bgra.PixelHeight;
+            if (srcW < 4 || srcH < 4) return;
+
+            // Match Windows 11 "Fill" aspect-ratio center-crop for this exact monitor
+            double monAspect = Math.Max(0.25, (double)slot.DesktopBounds.Width / Math.Max(1, slot.DesktopBounds.Height));
+            double imgAspect = (double)srcW / srcH;
+            int cropX = 0, cropY = 0, cropW = srcW, cropH = srcH;
+            if (imgAspect > monAspect)
+            {
+                cropW = Math.Clamp((int)Math.Round(srcH * monAspect), 1, srcW);
+                cropX = (srcW - cropW) / 2;
+            }
+            else if (imgAspect < monAspect)
+            {
+                cropH = Math.Clamp((int)Math.Round(srcW / monAspect), 1, srcH);
+                cropY = (srcH - cropH) / 2;
+            }
+
+            int stride = cropW * 4;
+            var pixels = new byte[stride * cropH];
+            bgra.CopyPixels(new System.Windows.Int32Rect(cropX, cropY, cropW, cropH), pixels, stride, 0);
+
+            var texDesc = new Texture2DDescription
+            {
+                Width = (uint)cropW,
+                Height = (uint)cropH,
+                MipLevels = 1,
+                ArraySize = 1,
+                Format = Vortice.DXGI.Format.B8G8R8A8_UNorm,
+                SampleDescription = new SampleDescription(1, 0),
+                Usage = ResourceUsage.Immutable,
+                BindFlags = BindFlags.ShaderResource,
+                CPUAccessFlags = CpuAccessFlags.None,
+                MiscFlags = ResourceOptionFlags.None
+            };
+
+            unsafe
+            {
+                fixed (byte* ptr = pixels)
+                {
+                    var initData = new SubresourceData((nint)ptr, (uint)stride, 0);
+                    slot.WallpaperTexture = _device.CreateTexture2D(texDesc, new[] { initData });
+                    slot.WallpaperSrv = _device.CreateShaderResourceView(slot.WallpaperTexture);
+                }
+            }
+        }
+        catch
+        {
+            slot.DisposeWallpaper();
+        }
+    }
+
+    private static string? ResolveWallpaperFilePath()
+    {
+        try
+        {
+            var sb = new StringBuilder(512);
+            if (SystemParametersInfoW(SPI_GETDESKWALLPAPER, (uint)sb.Capacity, sb, 0))
+            {
+                string p = sb.ToString().Trim('\0', ' ');
+                if (!string.IsNullOrWhiteSpace(p) && File.Exists(p)) return p;
+            }
+        }
+        catch { }
+
+        string transcoded = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
+            "Microsoft", "Windows", "Themes", "TranscodedWallpaper");
+        return File.Exists(transcoded) ? transcoded : null;
     }
 
     internal bool TryGetOutputForRect(
@@ -417,4 +631,8 @@ public sealed class DxgiBackdropSampler : IBackdropSampler
 
     [DllImport("user32.dll")]
     private static extern nint GetDesktopWindow();
+
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SystemParametersInfoW(uint uiAction, uint uiParam, StringBuilder pvParam, uint fWinIni);
 }
