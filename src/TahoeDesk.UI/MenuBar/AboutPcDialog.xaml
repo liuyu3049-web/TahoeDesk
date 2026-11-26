@@ -48,7 +48,7 @@
                 <TextBlock x:Name="MemoryText" Grid.Row="2" Grid.Column="1" Foreground="#F0FFFFFF" FontSize="12" />
 
                 <TextBlock Grid.Row="3" Grid.Column="0" Text="桌面版本" Foreground="#99FFFFFF" FontSize="12" HorizontalAlignment="Right" Margin="0,0,10,0" />
-                <TextBlock Text="TahoeDesk v1.0.0" Grid.Row="3" Grid.Column="1" Foreground="#F0FFFFFF" FontSize="12" />
+                <TextBlock Text="TahoeDesk v1.0.1" Grid.Row="3" Grid.Column="1" Foreground="#F0FFFFFF" FontSize="12" />
             </Grid>
 
             <Button Content="关闭" Width="96" Height="28" Background="#33FFFFFF" Foreground="#F5FFFFFF" BorderThickness="0" Click="OnCloseClick" />

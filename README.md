@@ -13,7 +13,7 @@
 
 - **零 DLL 注入**：不注入 `explorer.exe` 或任何第三方进程，不修改系统文件，无需管理员权限。
 - **看门狗自愈保护**：独立 `TahoeDesk.Watchdog.exe` 守护进程，异常崩溃或强杀时毫秒级自动恢复 Windows 原生任务栏与自动隐藏状态。
-- **低占用高流畅**：共享单次编译的 D3D11 HLSL 液态玻璃管线、弹窗关闭自动释放显存、统一图标缓存、常规常驻内存约 **50 MB**。
+- **低占用高流畅**：共享单次编译的 D3D11 HLSL 液态玻璃管线、按需懒加载 DXGI 抓屏、关闭弹窗/启动台自动释放显存与视觉树、常驻运存低至约 **30–50 MB**。
 
 ---
 
@@ -64,7 +64,7 @@ dotnet build TahoeDesk.sln -c Release
 # 2. 运行单元测试
 dotnet test tests/TahoeDesk.Core.Tests -c Release --no-build
 
-# 3. 打包绿色便携版 ZIP（输出到 dist/TahoeDesk-v1.0.0-win-x64-portable.zip）
+# 3. 打包绿色便携版 ZIP（输出到 dist/TahoeDesk-v1.0.1-win-x64-portable.zip）
 .\scripts\build-portable.ps1
 
 # 可选：打包免装 .NET 运行时的独立版本

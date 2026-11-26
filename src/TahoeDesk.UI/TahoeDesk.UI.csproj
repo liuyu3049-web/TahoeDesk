@@ -14,7 +14,7 @@
     <Product>TahoeDesk</Product>
     <AssemblyTitle>TahoeDesk</AssemblyTitle>
     <Description>TahoeDesk — macOS Tahoe Liquid Glass Desktop Shell for Windows 11</Description>
-    <Version>1.0.0</Version>
+    <Version>1.0.1</Version>
     <!-- Slim footprint & low-RAM Workstation GC -->
     <SatelliteResourceLanguages>zh-Hans;en</SatelliteResourceLanguages>
     <ServerGarbageCollection>false</ServerGarbageCollection>

@@ -50,7 +50,7 @@
                         Cursor="Hand"
                         Click="OnRestoreAndExitClick" />
                 <TextBlock x:Name="VersionFooterText"
-                           Text="TahoeDesk v1.0.0 · Liquid Glass Desktop Shell"
+                           Text="TahoeDesk v1.0.1 · Liquid Glass Desktop Shell"
                            FontSize="10.5"
                            Foreground="{DynamicResource SettingsSubtleBrush}"
                            HorizontalAlignment="Center"

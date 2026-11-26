@@ -15,7 +15,7 @@ namespace TahoeDesk.Core.Diagnostics;
 /// </summary>
 public static class DiagnosticsReportBuilder
 {
-    public const string AppVersion = "1.0.0";
+    public const string AppVersion = "1.0.1";
 
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
 
