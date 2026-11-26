@@ -86,9 +86,12 @@ public sealed class LiquidGlassRenderer : IDisposable
         long frameVersion = 0;
         int effectiveSampleMode = sampleMode;
 
-        // DockBackdrop (sampleMode == 1): prefer exact behind-Dock Windows wallpaper texture (sampleMode=0 -> pixel-accurate macOS glass,
-        // zero tooltip/window smudge!). If Wallpaper Engine is running, fall back to live DXGI same-Y flank blend (sampleMode=1).
-        if (sampleMode == 1 && _sampler.TryGetWallpaperBackdropForRect(surfaceRectPx, out srv, out outputBounds, out frameVersion) && srv is not null)
+        // DockBackdrop (sampleMode == 1) & Overlay Cards (preferCachedFrame == true):
+        // Prefer exact cached Windows wallpaper texture (0 MB DXGI Desktop Duplication overhead, zero feedback!).
+        // When Wallpaper Engine is running (or wallpaper unavailable), lazily fall back to live DXGI.
+        if ((sampleMode == 1 || preferCachedFrame)
+            && _sampler.TryGetWallpaperBackdropForRect(surfaceRectPx, out srv, out outputBounds, out frameVersion)
+            && srv is not null)
         {
             effectiveSampleMode = 0;
         }

@@ -59,6 +59,7 @@ public sealed class TrayProxyHost : IDisposable
     private bool _proxyDestroyed;
     private bool _disposed;
     private long _selfBroadcastUntilTicks;
+    private long _lastWallpaperEngineNotifyTicks = -60_000;
     private int _tickCounter;
 
     public TrayProxyHost()
@@ -112,20 +113,20 @@ public sealed class TrayProxyHost : IDisposable
         _started = true;
         _maintenanceTimer.Start();
 
-        BroadcastTaskbarCreated(isSelf: true);
-
-        // Delayed second sync (+2.5s) catches boot-time autostart apps (like Wallpaper Engine)
-        // that finish creating their tray windows slightly after TahoeDesk launches!
-        var delayedSync = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(2500) };
-        delayedSync.Tick += (_, _) =>
+        // Delay the single startup TaskbarCreated notification by 650ms so SetTaskbarAutoHideState & RegisterTopAppBar
+        // completely finish first — preventing Wallpaper Engine (cloneextensions64.dll) from receiving overlapping
+        // desktop teardown + TaskbarCreated reloads at startup!
+        var initialSync = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(650) };
+        initialSync.Tick += (_, _) =>
         {
-            delayedSync.Stop();
+            initialSync.Stop();
             if (!_disposed && !_proxyDestroyed)
             {
-                ResyncAllTrayIcons();
+                EnsureProxyFirstInZOrder();
+                BroadcastTaskbarCreated(isSelf: true);
             }
         };
-        delayedSync.Start();
+        initialSync.Start();
     }
 
     /// <summary>
@@ -533,7 +534,73 @@ public sealed class TrayProxyHost : IDisposable
         {
             _selfBroadcastUntilTicks = Environment.TickCount64 + 600;
         }
-        SendNotifyMessageW(HWND_BROADCAST, _taskbarCreatedMsg, 0, 0);
+
+        // Targeted async PostMessageW instead of blind HWND_BROADCAST:
+        // Wallpaper Engine (wallpaper64/wallpaper32) tears down & unloads cloneextensions64.dll whenever it gets
+        // TaskbarCreated — hitting it rapidly or while already registered triggers a known 0xc0000005 crash!
+        uint selfPid = (uint)Environment.ProcessId;
+        long now = Environment.TickCount64;
+        bool wallpaperAlreadyRegistered = isSelf && HasWallpaperEngineIconRegistered();
+        bool skipWallpaper = isSelf && (wallpaperAlreadyRegistered || (now - _lastWallpaperEngineNotifyTicks) < 60_000);
+        bool notifiedWallpaper = false;
+        var notifiedWallpaperPids = new HashSet<uint>();
+
+        EnumWindows((hwnd, _) =>
+        {
+            GetWindowThreadProcessId(hwnd, out uint pid);
+            if (pid == 0 || pid == selfPid) return true;
+
+            if (IsWallpaperEnginePid(pid))
+            {
+                if (skipWallpaper || !notifiedWallpaperPids.Add(pid))
+                {
+                    return true;
+                }
+                notifiedWallpaper = true;
+            }
+
+            PostMessageW(hwnd, _taskbarCreatedMsg, 0, 0);
+            return true;
+        }, 0);
+
+        if (notifiedWallpaper)
+        {
+            _lastWallpaperEngineNotifyTicks = now;
+        }
+    }
+
+    private bool HasWallpaperEngineIconRegistered()
+    {
+        foreach (var rec in _registry.GetVisibleIcons())
+        {
+            string? exe = TryResolveOwnerExePath(rec.Key.OwnerHwnd);
+            if (!string.IsNullOrEmpty(exe)
+                && (exe.EndsWith("wallpaper64.exe", StringComparison.OrdinalIgnoreCase)
+                    || exe.EndsWith("wallpaper32.exe", StringComparison.OrdinalIgnoreCase)))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private static bool IsWallpaperEnginePid(uint pid)
+    {
+        nint hProc = OpenProcess(0x1000 /* PROCESS_QUERY_LIMITED_INFORMATION */, false, pid);
+        if (hProc == 0) return false;
+        try
+        {
+            var sb = new System.Text.StringBuilder(260);
+            int cap = sb.Capacity;
+            if (!QueryFullProcessImageNameW(hProc, 0, sb, ref cap)) return false;
+            string path = sb.ToString();
+            return path.EndsWith("wallpaper64.exe", StringComparison.OrdinalIgnoreCase)
+                || path.EndsWith("wallpaper32.exe", StringComparison.OrdinalIgnoreCase);
+        }
+        finally
+        {
+            CloseHandle(hProc);
+        }
     }
 
     private static bool RegisterWindowClass(string className, nint hInstance, WndProcDelegate wndProc)
@@ -590,6 +657,7 @@ public sealed class TrayProxyHost : IDisposable
     }
 
     private delegate nint WndProcDelegate(nint hWnd, uint msg, nint wParam, nint lParam);
+    private delegate bool EnumWindowsProc(nint hwnd, nint lParam);
 
     [StructLayout(LayoutKind.Sequential)]
     private struct COPYDATASTRUCT
@@ -678,6 +746,10 @@ public sealed class TrayProxyHost : IDisposable
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool SetForegroundWindow(nint hWnd);
+
+    [DllImport("user32.dll")]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, nint lParam);
 
     [DllImport("user32.dll", CharSet = CharSet.Unicode)]
     private static extern nint FindWindowExW(nint hwndParent, nint hwndChildAfter, string lpszClass, string? lpszWindow);

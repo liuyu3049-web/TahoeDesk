@@ -41,7 +41,7 @@ public sealed class DxgiBackdropSampler : IBackdropSampler
     private sealed class OutputCaptureSlot : IDisposable
     {
         public required ScreenRect DesktopBounds { get; init; }
-        public required IDXGIOutputDuplication Duplication { get; init; }
+        public IDXGIOutputDuplication? Duplication { get; set; }
         public ID3D11Texture2D? Texture { get; set; }
         public ID3D11ShaderResourceView? Srv { get; set; }
         public ID3D11Texture2D? WallpaperTexture { get; set; }
@@ -58,7 +58,8 @@ public sealed class DxgiBackdropSampler : IBackdropSampler
 
         public void Dispose()
         {
-            try { Duplication.Dispose(); } catch { }
+            try { Duplication?.Dispose(); } catch { }
+            Duplication = null;
             DisposeWallpaper();
             Srv?.Dispose();
             Texture?.Dispose();
@@ -411,10 +412,18 @@ public sealed class DxgiBackdropSampler : IBackdropSampler
                 return true;
             }
 
+            // Lazy on-demand IDXGIOutputDuplication: ONLY allocate DWM duplication ring buffers (~20-40 MB!)
+            // when live DXGI capture is genuinely needed (e.g. Wallpaper Engine active).
+            if (slot.Duplication is null && !TryAttachDuplicationForSlot(slot))
+            {
+                _stateMachine.ReportAccessLost();
+                return false;
+            }
+
             IDXGIResource? desktopResource = null;
             try
             {
-                var hr = slot.Duplication.AcquireNextFrame(0, out OutduplFrameInfo frameInfo, out desktopResource);
+                var hr = slot.Duplication!.AcquireNextFrame(0, out OutduplFrameInfo frameInfo, out desktopResource);
                 if (hr == Vortice.DXGI.ResultCode.WaitTimeout)
                 {
                     if (slot.Srv is not null)
@@ -529,27 +538,12 @@ public sealed class DxgiBackdropSampler : IBackdropSampler
         DisposeOutputsOnly();
         try
         {
-            using var dxgiDevice = _device.QueryInterface<IDXGIDevice>();
-            using var adapter = dxgiDevice.GetAdapter();
-
-            uint idx = 0;
-            while (adapter.EnumOutputs(idx, out IDXGIOutput output).Success && output is not null)
+            // Populate lightweight monitor bounds ONLY — defer IDXGIOutputDuplication until actually needed
+            // so static-wallpaper setups use 0 bytes of DXGI Desktop Duplication ring-buffer RAM/VRAM!
+            var monitors = MonitorContext.GetAllMonitors();
+            foreach (var mon in monitors)
             {
-                idx++;
-                using (output)
-                {
-                    var desc = output.Description;
-                    if (!desc.AttachedToDesktop) continue;
-                    try
-                    {
-                        using var output1 = output.QueryInterface<IDXGIOutput1>();
-                        var coords = desc.DesktopCoordinates;
-                        var bounds = new ScreenRect(coords.Left, coords.Top, coords.Right, coords.Bottom);
-                        var dup = output1.DuplicateOutput(_device);
-                        _outputs.Add(new OutputCaptureSlot { DesktopBounds = bounds, Duplication = dup });
-                    }
-                    catch { }
-                }
+                _outputs.Add(new OutputCaptureSlot { DesktopBounds = mon.Bounds });
             }
 
             if (_outputs.Count > 0)
@@ -564,6 +558,40 @@ public sealed class DxgiBackdropSampler : IBackdropSampler
         catch
         {
             _stateMachine.ReportAccessLost();
+            return false;
+        }
+    }
+
+    private bool TryAttachDuplicationForSlot(OutputCaptureSlot slot)
+    {
+        if (_device is null) return false;
+        try
+        {
+            using var dxgiDevice = _device.QueryInterface<IDXGIDevice>();
+            using var adapter = dxgiDevice.GetAdapter();
+
+            uint idx = 0;
+            while (adapter.EnumOutputs(idx, out IDXGIOutput output).Success && output is not null)
+            {
+                idx++;
+                using (output)
+                {
+                    var desc = output.Description;
+                    if (!desc.AttachedToDesktop) continue;
+                    var coords = desc.DesktopCoordinates;
+                    if (Math.Abs(coords.Left - slot.DesktopBounds.Left) <= 4
+                        && Math.Abs(coords.Top - slot.DesktopBounds.Top) <= 4)
+                    {
+                        using var output1 = output.QueryInterface<IDXGIOutput1>();
+                        slot.Duplication = output1.DuplicateOutput(_device);
+                        return slot.Duplication is not null;
+                    }
+                }
+            }
+            return false;
+        }
+        catch
+        {
             return false;
         }
     }

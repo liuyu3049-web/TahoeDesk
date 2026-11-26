@@ -64,6 +64,7 @@ public partial class App : Application
     private int _dockRefreshInFlight;
     private int? _originalTaskbarAutoHideState;
     private long _lastAppBarHealMs;
+    private bool _startupMemoryTrimmed;
     private bool _cleanedUp;
 
     protected override void OnStartup(StartupEventArgs e)
@@ -806,6 +807,18 @@ public partial class App : Application
                 _spotlightWindow?.UpdateIndex(apps, files);
                 _launchpadWindow?.SyncApps(apps);
             });
+
+            if (!_startupMemoryTrimmed)
+            {
+                _startupMemoryTrimmed = true;
+                _ = Task.Run(async () =>
+                {
+                    await Task.Delay(2500);
+                    if (_cleanedUp) return;
+                    GC.Collect(2, GCCollectionMode.Optimized, blocking: false);
+                    try { SetProcessWorkingSetSize(GetCurrentProcess(), new nint(-1), new nint(-1)); } catch { }
+                });
+            }
         }
         catch (Exception ex)
         {
@@ -1098,4 +1111,11 @@ public partial class App : Application
     [DllImport("powrprof.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool SetSuspendState([MarshalAs(UnmanagedType.Bool)] bool hibernate, [MarshalAs(UnmanagedType.Bool)] bool forceCritical, [MarshalAs(UnmanagedType.Bool)] bool disableWakeEvent);
+
+    [DllImport("kernel32.dll")]
+    private static extern nint GetCurrentProcess();
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetProcessWorkingSetSize(nint hProcess, nint dwMinimumWorkingSetSize, nint dwMaximumWorkingSetSize);
 }

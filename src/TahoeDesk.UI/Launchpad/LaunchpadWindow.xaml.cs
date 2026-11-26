@@ -146,20 +146,7 @@ public partial class LaunchpadWindow : Window
         _layout.SyncWithInstalledApps(apps);
         _currentPage = _layout.ClampPage(_currentPage, _filterMode);
 
-        // Pre-warm wallpaper blur and page-1 app icons (35 items @ 96px) off the UI thread
-        _ = Task.Run(() =>
-        {
-            BlurredWallpaperProvider.GetBlurredWallpaper();
-            foreach (var app in _layout.ManualApps.Concat(apps).Take(_layout.ItemsPerPage))
-            {
-                string? path = app.IconPath ?? app.LaunchTarget;
-                if (!string.IsNullOrWhiteSpace(path))
-                {
-                    PreloadIconBitmap(path);
-                }
-            }
-        });
-
+        // Keep startup RAM lean: icons & blurred wallpaper decode lazily on demand when Launchpad opens!
         if (IsVisible)
         {
             RenderCurrentView();
