@@ -16,7 +16,7 @@ public sealed record CachedIconEntry(BitmapSource Bitmap, bool HasTransparentCor
 /// </summary>
 public static class SharedIconCache
 {
-    private const int MaxCachedIcons = 256;
+    private const int MaxCachedIcons = 160;
     private static readonly ConcurrentDictionary<string, CachedIconEntry?> Cache = new(StringComparer.OrdinalIgnoreCase);
 
     public static bool TryGetCached(string path, int sizePx, out BitmapSource? bitmap)
@@ -57,7 +57,13 @@ public static class SharedIconCache
 
         if (Cache.Count >= MaxCachedIcons)
         {
-            Cache.Clear();
+            // Evict only ~25% of entries to avoid a sudden re-extraction stutter across all visible icons
+            int toRemove = MaxCachedIcons / 4;
+            foreach (string oldKey in Cache.Keys)
+            {
+                if (toRemove-- <= 0) break;
+                Cache.TryRemove(oldKey, out _);
+            }
         }
 
         CachedIconEntry? entry = IsDirectImageFile(path)

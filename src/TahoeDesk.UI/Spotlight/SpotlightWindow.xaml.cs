@@ -55,18 +55,28 @@ public partial class SpotlightWindow : Window
         GlassBackdrop.OpacityPreset = settings.OpacityPreset;
         GlassBackdrop.IsDarkMode = isDarkMode;
 
-        Resources["SpotFgBrush"] = new SolidColorBrush(isDarkMode ? Color.FromArgb(0xF6, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0xF0, 0x12, 0x13, 0x18));
-        Resources["SpotSubtleBrush"] = new SolidColorBrush(isDarkMode ? Color.FromArgb(0x9E, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x94, 0x12, 0x13, 0x18));
-        Resources["SpotDividerBrush"] = new SolidColorBrush(isDarkMode ? Color.FromArgb(0x28, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x20, 0x00, 0x00, 0x00));
-        Resources["SpotBadgeBgBrush"] = new SolidColorBrush(isDarkMode ? Color.FromArgb(0x22, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x14, 0x00, 0x00, 0x00));
-        Resources["SpotSelectedBrush"] = new SolidColorBrush(Color.FromArgb(0xE0, 0x0A, 0x84, 0xFF));
+        static SolidColorBrush Frozen(Color c) { var b = new SolidColorBrush(c); b.Freeze(); return b; }
+
+        Resources["SpotFgBrush"] = Frozen(isDarkMode ? Color.FromArgb(0xF6, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0xF0, 0x12, 0x13, 0x18));
+        Resources["SpotSubtleBrush"] = Frozen(isDarkMode ? Color.FromArgb(0x9E, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x94, 0x12, 0x13, 0x18));
+        Resources["SpotDividerBrush"] = Frozen(isDarkMode ? Color.FromArgb(0x28, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x20, 0x00, 0x00, 0x00));
+        Resources["SpotBadgeBgBrush"] = Frozen(isDarkMode ? Color.FromArgb(0x22, 0xFF, 0xFF, 0xFF) : Color.FromArgb(0x14, 0x00, 0x00, 0x00));
+        Resources["SpotSelectedBrush"] = Frozen(Color.FromArgb(0xE0, 0x0A, 0x84, 0xFF));
+    }
+
+    private void HideAndReleaseVisuals()
+    {
+        Hide();
+        ResultsListPanel.Children.Clear();
+        _rowVisuals.Clear();
+        _results = [];
     }
 
     public void ToggleOnMonitor(MonitorContext monitor)
     {
         if (IsVisible)
         {
-            Hide();
+            HideAndReleaseVisuals();
             return;
         }
 
@@ -76,6 +86,8 @@ public partial class SpotlightWindow : Window
         QueryBox.Text = string.Empty;
         PlaceholderText.Visibility = Visibility.Visible;
         ResultsPane.Visibility = Visibility.Collapsed;
+        ResultsListPanel.Children.Clear();
+        _rowVisuals.Clear();
         _results = [];
         _selectedIndex = 0;
 
@@ -86,7 +98,7 @@ public partial class SpotlightWindow : Window
 
     private void OnWindowDeactivated(object? sender, EventArgs e)
     {
-        if (IsVisible) Hide();
+        if (IsVisible) HideAndReleaseVisuals();
     }
 
     private void OnQueryTextChanged(object sender, TextChangedEventArgs e)

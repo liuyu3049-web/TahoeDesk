@@ -276,7 +276,7 @@ public partial class App : Application
             RebuildShellsForCurrentMonitors();
         };
 
-        _indexRefreshTimer = new DispatcherTimer { Interval = TimeSpan.FromMinutes(3) };
+        _indexRefreshTimer = new DispatcherTimer { Interval = TimeSpan.FromMinutes(10) };
         _indexRefreshTimer.Tick += (_, _) => _ = RefreshSearchAndLaunchpadIndexAsync();
         _indexRefreshTimer.Start();
     }
@@ -438,6 +438,7 @@ public partial class App : Application
 
         long nowMs = Environment.TickCount64;
         if (nowMs - _lastAppBarHealMs < 2500) return;
+        _lastAppBarHealMs = nowMs;
 
         var liveMonitors = MonitorContext.GetAllMonitors();
         if (liveMonitors.Count == 0) return;

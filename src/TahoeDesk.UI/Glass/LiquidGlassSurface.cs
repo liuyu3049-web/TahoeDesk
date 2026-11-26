@@ -26,11 +26,19 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
 
     public static readonly DependencyProperty OpacityPresetProperty =
         DependencyProperty.Register(nameof(OpacityPreset), typeof(GlassOpacityPreset), typeof(LiquidGlassSurface),
-            new FrameworkPropertyMetadata(GlassOpacityPreset.Clear, FrameworkPropertyMetadataOptions.AffectsRender));
+            new FrameworkPropertyMetadata(GlassOpacityPreset.Clear, FrameworkPropertyMetadataOptions.AffectsRender, OnVisualPropertyChanged));
 
     public static readonly DependencyProperty IsDarkModeProperty =
         DependencyProperty.Register(nameof(IsDarkMode), typeof(bool), typeof(LiquidGlassSurface),
-            new FrameworkPropertyMetadata(true, FrameworkPropertyMetadataOptions.AffectsRender));
+            new FrameworkPropertyMetadata(true, FrameworkPropertyMetadataOptions.AffectsRender, OnVisualPropertyChanged));
+
+    private static void OnVisualPropertyChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
+    {
+        if (d is LiquidGlassSurface surface)
+        {
+            surface.SyncRenderingHook();
+        }
+    }
 
     public static readonly DependencyProperty IsOverlayCardProperty =
         DependencyProperty.Register(nameof(IsOverlayCard), typeof(bool), typeof(LiquidGlassSurface),
@@ -93,7 +101,8 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
     private bool _frozenDarkMode;
     private int _frozenWidthPx;
     private int _frozenHeightPx;
-    private const long MinBackdropRefreshIntervalMs = 66; // ~15 Hz staggered cap prevents AllowsTransparency PCIe readback stutter
+    private const long MinBackdropRefreshIntervalMs = 66; // ~15 Hz staggered cap for live DXGI
+    private const long StaticWallpaperRefreshIntervalMs = 1000; // 1 Hz check when backed by static wallpaper (15x less idle CPU!)
     private const long TransientMissGraceMs = 1500; // Keep last valid glass frame across brief DXGI misses (prevents Dock flicker!)
 
     public LiquidGlassSurface()
@@ -101,6 +110,7 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
         _staggerOffsetMs = (System.Threading.Interlocked.Increment(ref _surfaceStaggerCounter) % 4) * 17L;
         IsHitTestVisible = false;
         Loaded += (_, _) => SyncRenderingHook();
+        SizeChanged += (_, _) => SyncRenderingHook();
         Unloaded += (_, _) =>
         {
             UnhookRendering();
@@ -235,7 +245,8 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
         if (!_d3dImage.IsFrontBufferAvailable) return;
 
         long nowMs = _throttleClock.ElapsedMilliseconds + _staggerOffsetMs;
-        if (_hasValidFrame && (nowMs - _lastRenderMs) < MinBackdropRefreshIntervalMs)
+        long refreshInterval = _renderer.IsUsingStaticWallpaper ? StaticWallpaperRefreshIntervalMs : MinBackdropRefreshIntervalMs;
+        if (_hasValidFrame && (nowMs - _lastRenderMs) < refreshInterval)
         {
             return;
         }
@@ -249,11 +260,13 @@ public sealed class LiquidGlassSurface : FrameworkElement, IDisposable
         int heightPx = Math.Max(4, (int)Math.Round(ActualHeight * dpiMatrix.M22));
 
         // Overlay cards lock onto the clean pre-popup DXGI frame captured when they opened so they
-        // remain 100% visible in screenshots & remote desktop with ZERO self-capture feedback loop.
+        // remain 100% visible in screenshots & remote desktop with ZERO self-capture feedback loop
+        // AND unhook CompositionTarget.Rendering for 0 Hz idle CPU while open!
         if (IsOverlayCard && _hasValidFrame
             && _frozenWidthPx == widthPx && _frozenHeightPx == heightPx
             && _frozenPreset == OpacityPreset && _frozenDarkMode == IsDarkMode)
         {
+            UnhookRendering();
             return;
         }
 

@@ -36,6 +36,16 @@ public partial class DockWindow : Window
     private const double DividerWidthDip = 14.0;
     private const double CapsuleHorizontalPadDip = 14.0;
 
+    private static readonly SolidColorBrush FlashingDotBrush = CreateFrozenBrush(Color.FromRgb(0xFF, 0x45, 0x3A));
+    private static readonly SolidColorBrush NormalDotBrush = CreateFrozenBrush(Color.FromArgb(0xEB, 0xFF, 0xFF, 0xFF));
+
+    private static SolidColorBrush CreateFrozenBrush(Color c)
+    {
+        var b = new SolidColorBrush(c);
+        b.Freeze();
+        return b;
+    }
+
     private readonly MonitorContext _monitor;
     private readonly RecycleBinService _recycleBinService = new();
     private readonly SpringBounceAnimator _bounceAnimator = new();
@@ -186,9 +196,7 @@ public partial class DockWindow : Window
 
             slot.RunningDot.Width = next.IsFlashing ? 5.5 : 4.5;
             slot.RunningDot.Height = next.IsFlashing ? 5.5 : 4.5;
-            slot.RunningDot.Fill = new SolidColorBrush(next.IsFlashing
-                ? Color.FromRgb(0xFF, 0x45, 0x3A)
-                : Color.FromArgb(0xEB, 0xFF, 0xFF, 0xFF));
+            slot.RunningDot.Fill = next.IsFlashing ? FlashingDotBrush : NormalDotBrush;
             slot.RunningDot.Visibility = next.IsRunning || next.IsFlashing ? Visibility.Visible : Visibility.Hidden;
             slot.FlashBadge.Visibility = next.IsFlashing ? Visibility.Visible : Visibility.Collapsed;
 
@@ -418,7 +426,8 @@ public partial class DockWindow : Window
 
         if (!string.IsNullOrWhiteSpace(model.TargetPath))
         {
-            var iconEntry = SharedIconCache.GetOrExtractWithShape(model.TargetPath, 128);
+            // Match Launchpad's 96px cache key so Dock & Launchpad share the exact same frozen BitmapSource (0 duplicate RAM!)
+            var iconEntry = SharedIconCache.GetOrExtractWithShape(model.TargetPath, 96);
             if (iconEntry is not null)
             {
                 var img = new Image

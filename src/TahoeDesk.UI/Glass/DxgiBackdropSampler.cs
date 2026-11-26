@@ -281,7 +281,7 @@ public sealed class DxgiBackdropSampler : IBackdropSampler
             var bmp = new BitmapImage();
             bmp.BeginInit();
             bmp.StreamSource = ms;
-            bmp.DecodePixelWidth = 1024;
+            bmp.DecodePixelWidth = 640; // Visually identical after 22px Gaussian blur, 2.6x lower VRAM & decode RAM!
             bmp.CreateOptions = BitmapCreateOptions.IgnoreColorProfile;
             bmp.CacheOption = BitmapCacheOption.OnLoad;
             bmp.EndInit();

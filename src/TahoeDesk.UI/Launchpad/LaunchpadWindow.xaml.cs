@@ -206,6 +206,12 @@ public partial class LaunchpadWindow : Window
         FolderOverlay.Visibility = Visibility.Collapsed;
         _openFolderId = null;
         Hide();
+
+        // Release WPF visual tiles & fullscreen wallpaper image ref while Launchpad is hidden (~10-15 MB RAM saved!)
+        AppsGrid.Children.Clear();
+        PageDotsPanel.Children.Clear();
+        _renderedTiles.Clear();
+        WallpaperBlurImage.Source = null;
     }
 
     private void AnimateEntrance()

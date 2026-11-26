@@ -40,12 +40,25 @@ public partial class MenuBarWindow : Window
     private readonly DispatcherTimer _statusTimer;
     private readonly DispatcherTimer _imeTimer;
 
+    private static readonly SolidColorBrush BatteryChargingBrush = CreateFrozenBrush(Color.FromRgb(0x34, 0xC7, 0x59));
+    private static readonly SolidColorBrush BatteryLowBrush = CreateFrozenBrush(Color.FromRgb(0xFF, 0x3B, 0x30));
+
+    private static SolidColorBrush CreateFrozenBrush(Color c)
+    {
+        var b = new SolidColorBrush(c);
+        b.Freeze();
+        return b;
+    }
+
     private MonitorContext _monitor;
     private GlassSettings _settings;
     private IReadOnlyList<TrayDisplayItem> _lastTrayItems = [];
     private Button? _activeMenuButton;
     private uint _taskbarCreatedMsg;
     private uint _shellHookMsg;
+    private bool? _lastHasBattery;
+    private int _lastBatteryPercent = -1;
+    private bool _lastBatteryCharging;
 
     public event Action<nint>? WindowFlashDetected;
 
@@ -85,12 +98,19 @@ public partial class MenuBarWindow : Window
         SourceInitialized += OnSourceInitialized;
         Microsoft.Win32.SystemEvents.UserPreferenceChanged += OnUserPreferenceChanged;
 
-        _statusTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(1) };
+        _statusTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(2) };
         _statusTimer.Tick += (_, _) => RefreshSystemStatus();
         _statusTimer.Start();
 
-        _imeTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
-        _imeTimer.Tick += (_, _) => _vm.InputMethodLabel = _statusProvider.CaptureImeBadgeOnly(_vm.ActiveTargetHwnd);
+        _imeTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(450) };
+        _imeTimer.Tick += (_, _) =>
+        {
+            string badge = _statusProvider.CaptureImeBadgeOnly(_vm.ActiveTargetHwnd);
+            if (!string.Equals(_vm.InputMethodLabel, badge, StringComparison.Ordinal))
+            {
+                _vm.InputMethodLabel = badge;
+            }
+        };
         _imeTimer.Start();
 
         RefreshSystemStatus();
@@ -206,6 +226,7 @@ public partial class MenuBarWindow : Window
         Resources["MenuBarHoverBrush"] = hoverBrush;
         Resources["MenuBarActiveBrush"] = activeBrush;
         Resources["MenuBarInverseDotBrush"] = invBrush;
+        _lastBatteryPercent = -1; // Force BatteryFillBar to pick up updated theme ink on next tick
     }
 
     private void OnUserPreferenceChanged(object? sender, Microsoft.Win32.UserPreferenceChangedEventArgs e)
@@ -288,6 +309,17 @@ public partial class MenuBarWindow : Window
         var status = _statusProvider.Capture(_vm.ActiveTargetHwnd);
         _vm.ApplySystemStatus(status);
 
+        if (_lastHasBattery == status.HasBattery
+            && _lastBatteryPercent == status.BatteryPercent
+            && _lastBatteryCharging == status.IsCharging)
+        {
+            return;
+        }
+
+        _lastHasBattery = status.HasBattery;
+        _lastBatteryPercent = status.BatteryPercent;
+        _lastBatteryCharging = status.IsCharging;
+
         BatteryButton.Visibility = status.HasBattery ? Visibility.Visible : Visibility.Collapsed;
         if (status.HasBattery)
         {
@@ -295,16 +327,12 @@ public partial class MenuBarWindow : Window
             BatteryFillBar.Width = Math.Max(2, 25.0 * status.BatteryPercent / 100.0);
             if (status.IsCharging)
             {
-                var green = new SolidColorBrush(Color.FromRgb(0x34, 0xC7, 0x59));
-                green.Freeze();
-                BatteryFillBar.Background = green;
+                BatteryFillBar.Background = BatteryChargingBrush;
                 BatteryFillBar.Opacity = 0.78;
             }
             else if (status.BatteryPercent <= 20)
             {
-                var red = new SolidColorBrush(Color.FromRgb(0xFF, 0x3B, 0x30));
-                red.Freeze();
-                BatteryFillBar.Background = red;
+                BatteryFillBar.Background = BatteryLowBrush;
                 BatteryFillBar.Opacity = 0.80;
             }
             else

@@ -61,6 +61,7 @@ public sealed class LiquidGlassRenderer : IDisposable
     }
 
     public nint SharedD3D9SurfacePtr => _swapSlots[_activeSlotIndex]?.SharedD3d9Surface.NativePointer ?? 0;
+    public bool IsUsingStaticWallpaper => _lastRenderedFrameVersion <= -1000;
 
     /// <summary>
     /// Releases per-surface GPU render targets (e.g., when a popup closes) so closed overlays hold 0 bytes of VRAM.
