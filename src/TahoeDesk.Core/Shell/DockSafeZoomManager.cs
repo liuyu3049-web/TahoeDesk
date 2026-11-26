@@ -19,12 +19,25 @@ public sealed class DockSafeZoomManager
     private readonly object _gate = new();
     private readonly Dictionary<nint, ScreenRect> _preZoomBounds = new();
 
-    public static ScreenRect ComputeDockSafeVisibleRect(MonitorContext monitor, int topBarPx, int dockReservePx)
+    public static ScreenRect ComputeDockSafeVisibleRect(
+        MonitorContext monitor,
+        int topBarPx,
+        int dockReservePx,
+        ScreenRect? currentVisibleRect = null)
     {
         int top = Math.Max(monitor.WorkArea.Top, monitor.Bounds.Top + Math.Max(0, topBarPx));
         int bottom = Math.Max(top + 240, monitor.Bounds.Bottom - Math.Max(0, dockReservePx));
         bottom = Math.Min(bottom, monitor.Bounds.Bottom);
-        return new ScreenRect(monitor.Bounds.Left, top, monitor.Bounds.Right, bottom);
+
+        // Preserve current horizontal position and width (macOS vertical zoom from MenuBar to Dock)
+        int left = currentVisibleRect.HasValue && currentVisibleRect.Value.Width > 0
+            ? currentVisibleRect.Value.Left
+            : monitor.Bounds.Left;
+        int right = currentVisibleRect.HasValue && currentVisibleRect.Value.Width > 0
+            ? currentVisibleRect.Value.Right
+            : monitor.Bounds.Right;
+
+        return new ScreenRect(left, top, right, bottom);
     }
 
     public static ScreenRect ComputeOuterBoundsForVisibleTarget(
@@ -54,6 +67,12 @@ public sealed class DockSafeZoomManager
             && Math.Abs(actual.Bottom - target.Bottom) <= tolerancePx;
     }
 
+    public static bool IsVerticallyZoomed(ScreenRect actual, ScreenRect target, int tolerancePx = 18)
+    {
+        return Math.Abs(actual.Top - target.Top) <= tolerancePx
+            && Math.Abs(actual.Bottom - target.Bottom) <= tolerancePx;
+    }
+
     public bool ToggleZoom(nint hwnd, MonitorContext monitor, int topBarPx, int dockReservePx)
     {
         if (hwnd == 0 || !IsWindow(hwnd) || IsIconic(hwnd)) return false;
@@ -62,27 +81,28 @@ public sealed class DockSafeZoomManager
         var winRect = new ScreenRect(rawWin.Left, rawWin.Top, rawWin.Right, rawWin.Bottom);
         var extRect = TryGetExtendedFrameBounds(hwnd, out var dwmRect) ? dwmRect : winRect;
 
-        var targetVisible = ComputeDockSafeVisibleRect(monitor, topBarPx, dockReservePx);
+        var targetVisible = ComputeDockSafeVisibleRect(monitor, topBarPx, dockReservePx, extRect);
 
         lock (_gate)
         {
             PruneClosedWindowsLocked();
 
-            if (IsApproximatelyRect(extRect, targetVisible, tolerancePx: 18)
+            if (IsVerticallyZoomed(extRect, targetVisible, tolerancePx: 18)
                 && _preZoomBounds.TryGetValue(hwnd, out var savedOuter))
             {
                 _preZoomBounds.Remove(hwnd);
+                // Restore original vertical position & height while keeping any horizontal move/width adjustment
                 return SetWindowPos(
                     hwnd,
                     0,
-                    savedOuter.Left,
+                    winRect.Left,
                     savedOuter.Top,
-                    Math.Max(200, savedOuter.Width),
+                    Math.Max(200, winRect.Width),
                     Math.Max(160, savedOuter.Height),
                     SWP_NOZORDER | SWP_NOACTIVATE);
             }
 
-            // Save current un-zoomed outer bounds before expanding into Dock-safe area
+            // Save current un-zoomed outer bounds before expanding vertically from MenuBar to Dock
             _preZoomBounds[hwnd] = winRect;
         }
 
@@ -90,9 +110,9 @@ public sealed class DockSafeZoomManager
         return SetWindowPos(
             hwnd,
             0,
-            targetOuter.Left,
+            winRect.Left,
             targetOuter.Top,
-            Math.Max(200, targetOuter.Width),
+            Math.Max(200, winRect.Width),
             Math.Max(160, targetOuter.Height),
             SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED);
     }

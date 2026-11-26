@@ -7,7 +7,7 @@ namespace TahoeDesk.Core.Tests.Shell;
 public sealed class DockSafeZoomTests
 {
     [Fact]
-    public void ComputeDockSafeVisibleRect_AvoidsTopMenuBarAndBottomDock()
+    public void ComputeDockSafeVisibleRect_PreservesWindowWidthAndExpandsVerticallyBetweenMenuBarAndDock()
     {
         var mon = new MonitorContext(
             MonitorHandle: new nint(1),
@@ -16,12 +16,14 @@ public sealed class DockSafeZoomTests
             IsPrimary: true,
             WorkArea: new ScreenRect(0, 42, 2560, 1440));
 
-        var safe = DockSafeZoomManager.ComputeDockSafeVisibleRect(mon, topBarPx: 42, dockReservePx: 138);
+        var currentVisible = new ScreenRect(320, 160, 1820, 960);
+        var safe = DockSafeZoomManager.ComputeDockSafeVisibleRect(mon, topBarPx: 42, dockReservePx: 114, currentVisible);
 
-        Assert.Equal(0, safe.Left);
+        Assert.Equal(320, safe.Left);
+        Assert.Equal(1820, safe.Right);
         Assert.Equal(42, safe.Top);
-        Assert.Equal(2560, safe.Right);
-        Assert.Equal(1302, safe.Bottom);
+        Assert.Equal(1326, safe.Bottom);
+        Assert.True(DockSafeZoomManager.IsVerticallyZoomed(new ScreenRect(400, 44, 1900, 1324), safe));
     }
 
     [Fact]
